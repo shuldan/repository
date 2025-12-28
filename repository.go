@@ -6,40 +6,40 @@ import (
 	"errors"
 )
 
-type Finder[T Aggregate, I ID] interface {
-	Find(ctx context.Context, id I) (T, error)
+type Finder[T any] interface {
+	Find(ctx context.Context, id string) (T, error)
 	FindAll(ctx context.Context, limit, offset int) ([]T, error)
 	FindBy(ctx context.Context, conditions string, args []any) ([]T, error)
 	ExistsBy(ctx context.Context, conditions string, args []any) (bool, error)
 	CountBy(ctx context.Context, conditions string, args []any) (int64, error)
 }
 
-type Writer[T Aggregate, I ID] interface {
+type Writer[T any] interface {
 	Save(ctx context.Context, aggregate T) error
-	Delete(ctx context.Context, id I) error
+	Delete(ctx context.Context, id string) error
 }
 
-type Repository[T Aggregate, I ID] interface {
-	Finder[T, I]
-	Writer[T, I]
+type Repository[T any] interface {
+	Finder[T]
+	Writer[T]
 }
 
-type repository[T Aggregate, I ID] struct {
+type repository[T any] struct {
 	db     *sql.DB
 	mapper Mapper[T]
 }
 
-func NewRepository[T Aggregate, I ID](
+func NewRepository[T any](
 	db *sql.DB,
 	mapper Mapper[T],
-) Repository[T, I] {
-	return &repository[T, I]{
+) Repository[T] {
+	return &repository[T]{
 		db:     db,
 		mapper: mapper,
 	}
 }
 
-func (r repository[T, I]) Find(ctx context.Context, id I) (T, error) {
+func (r repository[T]) Find(ctx context.Context, id string) (T, error) {
 	row := r.mapper.Find(ctx, r.db, id)
 	aggregate, err := r.mapper.FromRow(row)
 	if err != nil {
@@ -52,7 +52,7 @@ func (r repository[T, I]) Find(ctx context.Context, id I) (T, error) {
 	return aggregate, nil
 }
 
-func (r repository[T, I]) FindAll(ctx context.Context, limit, offset int) ([]T, error) {
+func (r repository[T]) FindAll(ctx context.Context, limit, offset int) ([]T, error) {
 	rows, err := r.mapper.FindAll(ctx, r.db, limit, offset)
 	if err != nil {
 		return nil, err
@@ -61,7 +61,7 @@ func (r repository[T, I]) FindAll(ctx context.Context, limit, offset int) ([]T, 
 	return r.mapper.FromRows(rows)
 }
 
-func (r repository[T, I]) FindBy(ctx context.Context, conditions string, args []any) ([]T, error) {
+func (r repository[T]) FindBy(ctx context.Context, conditions string, args []any) ([]T, error) {
 	rows, err := r.mapper.FindBy(ctx, r.db, conditions, args)
 	if err != nil {
 		return nil, err
@@ -69,7 +69,7 @@ func (r repository[T, I]) FindBy(ctx context.Context, conditions string, args []
 	return r.mapper.FromRows(rows)
 }
 
-func (r repository[T, I]) ExistsBy(ctx context.Context, conditions string, args []any) (bool, error) {
+func (r repository[T]) ExistsBy(ctx context.Context, conditions string, args []any) (bool, error) {
 	exists, err := r.mapper.ExistsBy(ctx, r.db, conditions, args)
 	if err != nil {
 		return false, err
@@ -77,7 +77,7 @@ func (r repository[T, I]) ExistsBy(ctx context.Context, conditions string, args 
 	return exists, nil
 }
 
-func (r repository[T, I]) CountBy(ctx context.Context, conditions string, args []any) (int64, error) {
+func (r repository[T]) CountBy(ctx context.Context, conditions string, args []any) (int64, error) {
 	count, err := r.mapper.CountBy(ctx, r.db, conditions, args)
 	if err != nil {
 		return 0, err
@@ -85,10 +85,10 @@ func (r repository[T, I]) CountBy(ctx context.Context, conditions string, args [
 	return count, nil
 }
 
-func (r repository[T, I]) Save(ctx context.Context, aggregate T) error {
+func (r repository[T]) Save(ctx context.Context, aggregate T) error {
 	return r.mapper.Save(ctx, r.db, aggregate)
 }
 
-func (r repository[T, I]) Delete(ctx context.Context, id I) error {
+func (r repository[T]) Delete(ctx context.Context, id string) error {
 	return r.mapper.Delete(ctx, r.db, id)
 }
