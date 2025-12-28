@@ -14,37 +14,11 @@ func (t testID) String() string {
 }
 
 type testAggregate struct {
-	id              testID
-	mementoErr      error
-	mementoToReturn Memento
+	id testID
 }
 
 func (t *testAggregate) ID() ID {
 	return t.id
-}
-
-func (t *testAggregate) CreateMemento() (Memento, error) {
-	if t.mementoErr != nil {
-		return nil, t.mementoErr
-	}
-	return t.mementoToReturn, nil
-}
-
-type testMemento struct {
-	id                testID
-	aggregateErr      error
-	aggregateToReturn Aggregate
-}
-
-func (t *testMemento) ID() ID {
-	return t.id
-}
-
-func (t *testMemento) RestoreAggregate() (Aggregate, error) {
-	if t.aggregateErr != nil {
-		return nil, t.aggregateErr
-	}
-	return t.aggregateToReturn, nil
 }
 
 type mockMapper struct {
@@ -59,9 +33,9 @@ type mockMapper struct {
 	countByErr             error
 	saveErr                error
 	deleteErr              error
-	fromRowMemento         *testMemento
+	fromRowAggregate       *testAggregate
 	fromRowErr             error
-	fromRowsResult         []*testMemento
+	fromRowsResult         []*testAggregate
 	fromRowsErr            error
 	findCalled             int
 	findAllCalled          int
@@ -74,7 +48,7 @@ type mockMapper struct {
 	fromRowsCalled         int
 	lastFindID             ID
 	lastDeleteID           ID
-	lastSaveMemento        *testMemento
+	lastSaveAggregate      *testAggregate
 	lastFindByConditions   string
 	lastFindByArgs         []any
 	lastExistsByConditions string
@@ -115,9 +89,9 @@ func (m *mockMapper) CountBy(ctx context.Context, db *sql.DB, conditions string,
 	return m.countByResult, m.countByErr
 }
 
-func (m *mockMapper) Save(ctx context.Context, db *sql.DB, memento *testMemento) error {
+func (m *mockMapper) Save(ctx context.Context, db *sql.DB, aggregate *testAggregate) error {
 	m.saveCalled++
-	m.lastSaveMemento = memento
+	m.lastSaveAggregate = aggregate
 	return m.saveErr
 }
 
@@ -127,12 +101,12 @@ func (m *mockMapper) Delete(ctx context.Context, db *sql.DB, id ID) error {
 	return m.deleteErr
 }
 
-func (m *mockMapper) FromRow(row *sql.Row) (*testMemento, error) {
+func (m *mockMapper) FromRow(row *sql.Row) (*testAggregate, error) {
 	m.fromRowCalled++
-	return m.fromRowMemento, m.fromRowErr
+	return m.fromRowAggregate, m.fromRowErr
 }
 
-func (m *mockMapper) FromRows(rows *sql.Rows) ([]*testMemento, error) {
+func (m *mockMapper) FromRows(rows *sql.Rows) ([]*testAggregate, error) {
 	m.fromRowsCalled++
 	return m.fromRowsResult, m.fromRowsErr
 }
@@ -143,7 +117,7 @@ func TestNewRepository_Success(t *testing.T) {
 	db := &sql.DB{}
 	mapper := &mockMapper{}
 
-	repo := NewRepository[*testAggregate, testID, *testMemento](db, mapper)
+	repo := NewRepository[*testAggregate, testID](db, mapper)
 
 	if repo == nil {
 		t.Fatal("NewRepository returned nil")
@@ -155,13 +129,12 @@ func TestRepository_Find_Success(t *testing.T) {
 
 	db := &sql.DB{}
 	agg := &testAggregate{id: "test-id"}
-	mem := &testMemento{id: "test-id", aggregateToReturn: agg}
 	mapper := &mockMapper{
-		findRow:        &sql.Row{},
-		fromRowMemento: mem,
+		findRow:          &sql.Row{},
+		fromRowAggregate: agg,
 	}
 
-	repo := NewRepository[*testAggregate, testID, *testMemento](db, mapper)
+	repo := NewRepository[*testAggregate, testID](db, mapper)
 	result, err := repo.Find(context.Background(), testID("test-id"))
 
 	if err != nil {
@@ -186,7 +159,7 @@ func TestRepository_Find_NotFound(t *testing.T) {
 		fromRowErr: sql.ErrNoRows,
 	}
 
-	repo := NewRepository[*testAggregate, testID, *testMemento](db, mapper)
+	repo := NewRepository[*testAggregate, testID](db, mapper)
 	_, err := repo.Find(context.Background(), testID("missing-id"))
 
 	if err == nil {
@@ -212,30 +185,7 @@ func TestRepository_Find_FromRowError(t *testing.T) {
 		fromRowErr: expectedErr,
 	}
 
-	repo := NewRepository[*testAggregate, testID, *testMemento](db, mapper)
-	_, err := repo.Find(context.Background(), testID("id"))
-
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-
-	if !errors.Is(err, expectedErr) {
-		t.Errorf("expected %v, got %v", expectedErr, err)
-	}
-}
-
-func TestRepository_Find_RestoreAggregateError(t *testing.T) {
-	t.Parallel()
-
-	db := &sql.DB{}
-	expectedErr := errors.New("restore error")
-	mem := &testMemento{id: "id", aggregateErr: expectedErr}
-	mapper := &mockMapper{
-		findRow:        &sql.Row{},
-		fromRowMemento: mem,
-	}
-
-	repo := NewRepository[*testAggregate, testID, *testMemento](db, mapper)
+	repo := NewRepository[*testAggregate, testID](db, mapper)
 	_, err := repo.Find(context.Background(), testID("id"))
 
 	if err == nil {
@@ -253,15 +203,13 @@ func TestRepository_FindAll_Success(t *testing.T) {
 	db := &sql.DB{}
 	agg1 := &testAggregate{id: "id1"}
 	agg2 := &testAggregate{id: "id2"}
-	mem1 := &testMemento{id: "id1", aggregateToReturn: agg1}
-	mem2 := &testMemento{id: "id2", aggregateToReturn: agg2}
 
 	mapper := &mockMapper{
 		findAllRows:    &sql.Rows{},
-		fromRowsResult: []*testMemento{mem1, mem2},
+		fromRowsResult: []*testAggregate{agg1, agg2},
 	}
 
-	repo := NewRepository[*testAggregate, testID, *testMemento](db, mapper)
+	repo := NewRepository[*testAggregate, testID](db, mapper)
 	results, err := repo.FindAll(context.Background(), 10, 0)
 
 	if err != nil {
@@ -282,7 +230,7 @@ func TestRepository_FindAll_FindAllError(t *testing.T) {
 		findAllErr: expectedErr,
 	}
 
-	repo := NewRepository[*testAggregate, testID, *testMemento](db, mapper)
+	repo := NewRepository[*testAggregate, testID](db, mapper)
 	_, err := repo.FindAll(context.Background(), 10, 0)
 
 	if err == nil {
@@ -294,7 +242,7 @@ func TestRepository_FindAll_FindAllError(t *testing.T) {
 	}
 }
 
-func TestRepository_FindAll_RowsToAggregatesError(t *testing.T) {
+func TestRepository_FindAll_FromRowsError(t *testing.T) {
 	t.Parallel()
 
 	db := &sql.DB{}
@@ -304,7 +252,7 @@ func TestRepository_FindAll_RowsToAggregatesError(t *testing.T) {
 		fromRowsErr: expectedErr,
 	}
 
-	repo := NewRepository[*testAggregate, testID, *testMemento](db, mapper)
+	repo := NewRepository[*testAggregate, testID](db, mapper)
 	_, err := repo.FindAll(context.Background(), 10, 0)
 
 	if err == nil {
@@ -321,14 +269,13 @@ func TestRepository_FindBy_Success(t *testing.T) {
 
 	db := &sql.DB{}
 	agg := &testAggregate{id: "id"}
-	mem := &testMemento{id: "id", aggregateToReturn: agg}
 
 	mapper := &mockMapper{
 		findByRows:     &sql.Rows{},
-		fromRowsResult: []*testMemento{mem},
+		fromRowsResult: []*testAggregate{agg},
 	}
 
-	repo := NewRepository[*testAggregate, testID, *testMemento](db, mapper)
+	repo := NewRepository[*testAggregate, testID](db, mapper)
 	results, err := repo.FindBy(context.Background(), "status = ?", []any{"active"})
 
 	if err != nil {
@@ -353,7 +300,7 @@ func TestRepository_FindBy_FindByError(t *testing.T) {
 		findByErr: expectedErr,
 	}
 
-	repo := NewRepository[*testAggregate, testID, *testMemento](db, mapper)
+	repo := NewRepository[*testAggregate, testID](db, mapper)
 	_, err := repo.FindBy(context.Background(), "status = ?", []any{"active"})
 
 	if err == nil {
@@ -365,7 +312,7 @@ func TestRepository_FindBy_FindByError(t *testing.T) {
 	}
 }
 
-func TestRepository_FindBy_RowsToAggregatesError(t *testing.T) {
+func TestRepository_FindBy_FromRowsError(t *testing.T) {
 	t.Parallel()
 
 	db := &sql.DB{}
@@ -375,7 +322,7 @@ func TestRepository_FindBy_RowsToAggregatesError(t *testing.T) {
 		fromRowsErr: expectedErr,
 	}
 
-	repo := NewRepository[*testAggregate, testID, *testMemento](db, mapper)
+	repo := NewRepository[*testAggregate, testID](db, mapper)
 	_, err := repo.FindBy(context.Background(), "x=?", []any{1})
 
 	if err == nil {
@@ -395,7 +342,7 @@ func TestRepository_ExistsBy_True(t *testing.T) {
 		existsByResult: true,
 	}
 
-	repo := NewRepository[*testAggregate, testID, *testMemento](db, mapper)
+	repo := NewRepository[*testAggregate, testID](db, mapper)
 	exists, err := repo.ExistsBy(context.Background(), "id = ?", []any{"123"})
 
 	if err != nil {
@@ -419,7 +366,7 @@ func TestRepository_ExistsBy_False(t *testing.T) {
 		existsByResult: false,
 	}
 
-	repo := NewRepository[*testAggregate, testID, *testMemento](db, mapper)
+	repo := NewRepository[*testAggregate, testID](db, mapper)
 	exists, err := repo.ExistsBy(context.Background(), "id = ?", []any{"999"})
 
 	if err != nil {
@@ -440,7 +387,7 @@ func TestRepository_ExistsBy_Error(t *testing.T) {
 		existsByErr: expectedErr,
 	}
 
-	repo := NewRepository[*testAggregate, testID, *testMemento](db, mapper)
+	repo := NewRepository[*testAggregate, testID](db, mapper)
 	_, err := repo.ExistsBy(context.Background(), "x=?", []any{1})
 
 	if err == nil {
@@ -460,7 +407,7 @@ func TestRepository_CountBy_Success(t *testing.T) {
 		countByResult: 42,
 	}
 
-	repo := NewRepository[*testAggregate, testID, *testMemento](db, mapper)
+	repo := NewRepository[*testAggregate, testID](db, mapper)
 	count, err := repo.CountBy(context.Background(), "active = ?", []any{true})
 
 	if err != nil {
@@ -484,7 +431,7 @@ func TestRepository_CountBy_Zero(t *testing.T) {
 		countByResult: 0,
 	}
 
-	repo := NewRepository[*testAggregate, testID, *testMemento](db, mapper)
+	repo := NewRepository[*testAggregate, testID](db, mapper)
 	count, err := repo.CountBy(context.Background(), "x=?", []any{1})
 
 	if err != nil {
@@ -505,7 +452,7 @@ func TestRepository_CountBy_Error(t *testing.T) {
 		countByErr: expectedErr,
 	}
 
-	repo := NewRepository[*testAggregate, testID, *testMemento](db, mapper)
+	repo := NewRepository[*testAggregate, testID](db, mapper)
 	_, err := repo.CountBy(context.Background(), "x=?", []any{1})
 
 	if err == nil {
@@ -521,11 +468,10 @@ func TestRepository_Save_Success(t *testing.T) {
 	t.Parallel()
 
 	db := &sql.DB{}
-	mem := &testMemento{id: "save-id"}
-	agg := &testAggregate{id: "save-id", mementoToReturn: mem}
+	agg := &testAggregate{id: "save-id"}
 	mapper := &mockMapper{}
 
-	repo := NewRepository[*testAggregate, testID, *testMemento](db, mapper)
+	repo := NewRepository[*testAggregate, testID](db, mapper)
 	err := repo.Save(context.Background(), agg)
 
 	if err != nil {
@@ -536,51 +482,26 @@ func TestRepository_Save_Success(t *testing.T) {
 		t.Errorf("expected Save called 1 time, got %d", mapper.saveCalled)
 	}
 
-	if mapper.lastSaveMemento == nil {
-		t.Fatal("expected memento to be saved")
+	if mapper.lastSaveAggregate == nil {
+		t.Fatal("expected aggregate to be saved")
 	}
 
-	if mapper.lastSaveMemento.ID().String() != "save-id" {
-		t.Errorf("expected 'save-id', got %v", mapper.lastSaveMemento.ID().String())
-	}
-}
-
-func TestRepository_Save_CreateMementoError(t *testing.T) {
-	t.Parallel()
-
-	db := &sql.DB{}
-	expectedErr := errors.New("memento error")
-	agg := &testAggregate{id: "id", mementoErr: expectedErr}
-	mapper := &mockMapper{}
-
-	repo := NewRepository[*testAggregate, testID, *testMemento](db, mapper)
-	err := repo.Save(context.Background(), agg)
-
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-
-	if !errors.Is(err, expectedErr) {
-		t.Errorf("expected %v, got %v", expectedErr, err)
-	}
-
-	if mapper.saveCalled != 0 {
-		t.Errorf("expected Save not called, but called %d times", mapper.saveCalled)
+	if mapper.lastSaveAggregate.ID().String() != "save-id" {
+		t.Errorf("expected 'save-id', got %v", mapper.lastSaveAggregate.ID().String())
 	}
 }
 
-func TestRepository_Save_SaveError(t *testing.T) {
+func TestRepository_Save_Error(t *testing.T) {
 	t.Parallel()
 
 	db := &sql.DB{}
 	expectedErr := errors.New("save error")
-	mem := &testMemento{id: "id"}
-	agg := &testAggregate{id: "id", mementoToReturn: mem}
+	agg := &testAggregate{id: "id"}
 	mapper := &mockMapper{
 		saveErr: expectedErr,
 	}
 
-	repo := NewRepository[*testAggregate, testID, *testMemento](db, mapper)
+	repo := NewRepository[*testAggregate, testID](db, mapper)
 	err := repo.Save(context.Background(), agg)
 
 	if err == nil {
@@ -598,7 +519,7 @@ func TestRepository_Delete_Success(t *testing.T) {
 	db := &sql.DB{}
 	mapper := &mockMapper{}
 
-	repo := NewRepository[*testAggregate, testID, *testMemento](db, mapper)
+	repo := NewRepository[*testAggregate, testID](db, mapper)
 	err := repo.Delete(context.Background(), testID("delete-id"))
 
 	if err != nil {
@@ -623,7 +544,7 @@ func TestRepository_Delete_Error(t *testing.T) {
 		deleteErr: expectedErr,
 	}
 
-	repo := NewRepository[*testAggregate, testID, *testMemento](db, mapper)
+	repo := NewRepository[*testAggregate, testID](db, mapper)
 	err := repo.Delete(context.Background(), testID("id"))
 
 	if err == nil {
@@ -635,42 +556,16 @@ func TestRepository_Delete_Error(t *testing.T) {
 	}
 }
 
-func TestRepository_RowsToAggregates_RestoreError(t *testing.T) {
-	t.Parallel()
-
-	db := &sql.DB{}
-	expectedErr := errors.New("restore error")
-	agg1 := &testAggregate{id: "id1"}
-	mem1 := &testMemento{id: "id1", aggregateToReturn: agg1}
-	mem2 := &testMemento{id: "id2", aggregateErr: expectedErr}
-
-	mapper := &mockMapper{
-		findAllRows:    &sql.Rows{},
-		fromRowsResult: []*testMemento{mem1, mem2},
-	}
-
-	repo := NewRepository[*testAggregate, testID, *testMemento](db, mapper)
-	_, err := repo.FindAll(context.Background(), 10, 0)
-
-	if err == nil {
-		t.Fatal("expected error, got nil")
-	}
-
-	if !errors.Is(err, expectedErr) {
-		t.Errorf("expected %v, got %v", expectedErr, err)
-	}
-}
-
-func TestRepository_RowsToAggregates_EmptyResult(t *testing.T) {
+func TestRepository_FindAll_EmptyResult(t *testing.T) {
 	t.Parallel()
 
 	db := &sql.DB{}
 	mapper := &mockMapper{
 		findAllRows:    &sql.Rows{},
-		fromRowsResult: []*testMemento{},
+		fromRowsResult: []*testAggregate{},
 	}
 
-	repo := NewRepository[*testAggregate, testID, *testMemento](db, mapper)
+	repo := NewRepository[*testAggregate, testID](db, mapper)
 	results, err := repo.FindAll(context.Background(), 10, 0)
 
 	if err != nil {
@@ -695,9 +590,9 @@ func TestRepository_IntegrationScenarios(t *testing.T) {
 			name: "find_all_with_limit_offset",
 			setupRepo: func() (Repository[*testAggregate, testID], *mockMapper) {
 				db := &sql.DB{}
-				mem := &testMemento{id: "1", aggregateToReturn: &testAggregate{id: "1"}}
-				mapper := &mockMapper{findAllRows: &sql.Rows{}, fromRowsResult: []*testMemento{mem}}
-				return NewRepository[*testAggregate, testID, *testMemento](db, mapper), mapper
+				agg := &testAggregate{id: "1"}
+				mapper := &mockMapper{findAllRows: &sql.Rows{}, fromRowsResult: []*testAggregate{agg}}
+				return NewRepository[*testAggregate, testID](db, mapper), mapper
 			},
 			operation: func(r Repository[*testAggregate, testID]) error {
 				_, err := r.FindAll(context.Background(), 100, 50)
@@ -709,9 +604,9 @@ func TestRepository_IntegrationScenarios(t *testing.T) {
 			name: "find_by_with_multiple_args",
 			setupRepo: func() (Repository[*testAggregate, testID], *mockMapper) {
 				db := &sql.DB{}
-				mem := &testMemento{id: "x", aggregateToReturn: &testAggregate{id: "x"}}
-				mapper := &mockMapper{findByRows: &sql.Rows{}, fromRowsResult: []*testMemento{mem}}
-				return NewRepository[*testAggregate, testID, *testMemento](db, mapper), mapper
+				agg := &testAggregate{id: "x"}
+				mapper := &mockMapper{findByRows: &sql.Rows{}, fromRowsResult: []*testAggregate{agg}}
+				return NewRepository[*testAggregate, testID](db, mapper), mapper
 			},
 			operation: func(r Repository[*testAggregate, testID]) error {
 				_, err := r.FindBy(context.Background(), "a=? AND b=?", []any{1, 2})
