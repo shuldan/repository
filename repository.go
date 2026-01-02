@@ -8,7 +8,7 @@ import (
 
 type Finder[T any] interface {
 	Find(ctx context.Context, id string) (T, error)
-	FindAll(ctx context.Context, limit, offset int) ([]T, error)
+	FindAll(ctx context.Context, limit, offset int64) ([]T, error)
 	FindBy(ctx context.Context, conditions string, args []any) ([]T, error)
 	ExistsBy(ctx context.Context, conditions string, args []any) (bool, error)
 	CountBy(ctx context.Context, conditions string, args []any) (int64, error)
@@ -52,7 +52,7 @@ func (r repository[T]) Find(ctx context.Context, id string) (T, error) {
 	return aggregate, nil
 }
 
-func (r repository[T]) FindAll(ctx context.Context, limit, offset int) ([]T, error) {
+func (r repository[T]) FindAll(ctx context.Context, limit, offset int64) ([]T, error) {
 	rows, err := r.mapper.FindAll(ctx, r.db, limit, offset)
 	if err != nil {
 		return nil, err

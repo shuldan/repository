@@ -57,7 +57,7 @@ func (m *mockMapper) Find(ctx context.Context, db *sql.DB, id string) *sql.Row {
 	return m.findRow
 }
 
-func (m *mockMapper) FindAll(ctx context.Context, db *sql.DB, limit, offset int) (*sql.Rows, error) {
+func (m *mockMapper) FindAll(ctx context.Context, db *sql.DB, limit, offset int64) (*sql.Rows, error) {
 	m.findAllCalled++
 	return m.findAllRows, m.findAllErr
 }
