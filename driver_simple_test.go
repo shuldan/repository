@@ -3,7 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
-	sqlDriver "database/sql/driver" 
+	sqlDriver "database/sql/driver"
 	"errors"
 	"fmt"
 	"testing"
