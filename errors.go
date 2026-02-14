@@ -3,5 +3,7 @@ package repository
 import "errors"
 
 var (
-	ErrEntityNotFound = errors.New("entity not found")
+	ErrNotFound               = errors.New("entity not found")
+	ErrConcurrentModification = errors.New("concurrent modification")
+	ErrInvalidCursor          = errors.New("invalid cursor")
 )

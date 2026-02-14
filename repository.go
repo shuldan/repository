@@ -4,91 +4,127 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 )
 
-type Finder[T any] interface {
-	Find(ctx context.Context, id string) (T, error)
-	FindAll(ctx context.Context, limit, offset int64) ([]T, error)
-	FindBy(ctx context.Context, conditions string, args []any) ([]T, error)
-	ExistsBy(ctx context.Context, conditions string, args []any) (bool, error)
-	CountBy(ctx context.Context, conditions string, args []any) (int64, error)
+type Repository[T any] struct {
+	db      *sql.DB
+	table   Table
+	dialect Dialect
+	driver  driver[T]
 }
 
-type Writer[T any] interface {
-	Save(ctx context.Context, aggregate T) error
-	Delete(ctx context.Context, id string) error
-}
-
-type Repository[T any] interface {
-	Finder[T]
-	Writer[T]
-}
-
-type repository[T any] struct {
-	db     *sql.DB
-	mapper Mapper[T]
-}
-
-func NewRepository[T any](
-	db *sql.DB,
-	mapper Mapper[T],
-) Repository[T] {
-	return &repository[T]{
-		db:     db,
-		mapper: mapper,
+func New[T any](db *sql.DB, dialect Dialect, mapping Mapping[T]) *Repository[T] {
+	m := mapping.configure(dialect)
+	return &Repository[T]{
+		db:      db,
+		table:   m.table,
+		dialect: dialect,
+		driver:  m.driver,
 	}
 }
 
-func (r repository[T]) Find(ctx context.Context, id string) (T, error) {
-	row := r.mapper.Find(ctx, r.db, id)
-	aggregate, err := r.mapper.FromRow(row)
+func (r *Repository[T]) Find(ctx context.Context, id string) (T, error) {
+	spec := r.withSoftDelete(Eq(r.table.PrimaryKey, id))
+	condition, args, _ := spec.ToSQL(r.dialect, 1)
+	query := r.table.selectWhere(condition)
+
+	agg, err := r.driver.findOne(ctx, r.db, query, args)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return aggregate, errors.Join(ErrEntityNotFound, err)
+			return agg, fmt.Errorf("%w: %v", ErrNotFound, err)
 		}
-		return aggregate, err
+		return agg, err
+	}
+	return agg, nil
+}
+
+func (r *Repository[T]) FindBy(ctx context.Context, s Spec) ([]T, error) {
+	s = r.withSoftDelete(s)
+
+	var query string
+	var args []any
+
+	if s != nil {
+		condition, a, _ := s.ToSQL(r.dialect, 1)
+		args = a
+		query = r.table.selectWhere(condition)
+	} else {
+		query = r.table.selectFrom()
 	}
 
-	return aggregate, nil
+	return r.driver.findMany(ctx, r.db, query, args)
 }
 
-func (r repository[T]) FindAll(ctx context.Context, limit, offset int64) ([]T, error) {
-	rows, err := r.mapper.FindAll(ctx, r.db, limit, offset)
-	if err != nil {
-		return nil, err
+func (r *Repository[T]) ExistsBy(ctx context.Context, s Spec) (bool, error) {
+	s = r.withSoftDelete(s)
+
+	var query string
+	var args []any
+
+	if s != nil {
+		condition, a, _ := s.ToSQL(r.dialect, 1)
+		args = a
+		query = fmt.Sprintf("SELECT EXISTS(SELECT 1 FROM %s WHERE %s)", r.table.Name, condition)
+	} else {
+		query = fmt.Sprintf("SELECT EXISTS(SELECT 1 FROM %s)", r.table.Name)
 	}
 
-	return r.mapper.FromRows(rows)
+	var exists bool
+	err := r.db.QueryRowContext(ctx, query, args...).Scan(&exists)
+	return exists, err
 }
 
-func (r repository[T]) FindBy(ctx context.Context, conditions string, args []any) ([]T, error) {
-	rows, err := r.mapper.FindBy(ctx, r.db, conditions, args)
-	if err != nil {
-		return nil, err
+func (r *Repository[T]) CountBy(ctx context.Context, s Spec) (int64, error) {
+	s = r.withSoftDelete(s)
+
+	var query string
+	var args []any
+
+	if s != nil {
+		condition, a, _ := s.ToSQL(r.dialect, 1)
+		args = a
+		query = fmt.Sprintf("SELECT COUNT(*) FROM %s WHERE %s", r.table.Name, condition)
+	} else {
+		query = fmt.Sprintf("SELECT COUNT(*) FROM %s", r.table.Name)
 	}
-	return r.mapper.FromRows(rows)
+
+	var count int64
+	err := r.db.QueryRowContext(ctx, query, args...).Scan(&count)
+	return count, err
 }
 
-func (r repository[T]) ExistsBy(ctx context.Context, conditions string, args []any) (bool, error) {
-	exists, err := r.mapper.ExistsBy(ctx, r.db, conditions, args)
-	if err != nil {
-		return false, err
+func (r *Repository[T]) Save(ctx context.Context, aggregate T) error {
+	return r.driver.save(ctx, r.db, r.db, aggregate)
+}
+
+func (r *Repository[T]) SaveTx(ctx context.Context, tx *sql.Tx, aggregate T) error {
+	return r.driver.save(ctx, nil, tx, aggregate)
+}
+
+func (r *Repository[T]) Delete(ctx context.Context, id string) error {
+	return r.driver.delete(ctx, r.db, r.db, id)
+}
+
+func (r *Repository[T]) DeleteTx(ctx context.Context, tx *sql.Tx, id string) error {
+	return r.driver.delete(ctx, nil, tx, id)
+}
+
+func (r *Repository[T]) Query(ctx context.Context) *Query[T] {
+	return &Query[T]{
+		repo:    r,
+		ctx:     ctx,
+		forward: true,
 	}
-	return exists, nil
 }
 
-func (r repository[T]) CountBy(ctx context.Context, conditions string, args []any) (int64, error) {
-	count, err := r.mapper.CountBy(ctx, r.db, conditions, args)
-	if err != nil {
-		return 0, err
+func (r *Repository[T]) withSoftDelete(s Spec) Spec {
+	if r.table.SoftDelete == "" {
+		return s
 	}
-	return count, nil
-}
-
-func (r repository[T]) Save(ctx context.Context, aggregate T) error {
-	return r.mapper.Save(ctx, r.db, aggregate)
-}
-
-func (r repository[T]) Delete(ctx context.Context, id string) error {
-	return r.mapper.Delete(ctx, r.db, id)
+	sd := IsNull(r.table.SoftDelete)
+	if s == nil {
+		return sd
+	}
+	return And(sd, s)
 }
