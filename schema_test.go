@@ -8,7 +8,7 @@ import (
 func newTestTable() Table {
 	return Table{
 		Name:       "users",
-		PrimaryKey: "id",
+		PrimaryKey: []string{"id"},
 		Columns:    []string{"id", "name", "email"},
 	}
 }

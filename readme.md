@@ -14,6 +14,7 @@
 - **Типобезопасность** — полная поддержка Go Generics, никаких `interface{}`
 - **Декларативный маппинг** — описываете таблицу и функции сканирования, SQL генерируется автоматически
 - **Простые и составные агрегаты** — `Simple` для одной таблицы, `Composite` для агрегата с дочерними сущностями
+- **Составной первичный ключ** — поддержка одиночных и составных PK (`(account_id, role_id)`)
 - **Спецификации** — типобезопасный построитель WHERE-условий (`Eq`, `In`, `Like`, `And`, `Or`, `Not`, `Raw` и др.)
 - **Fluent Query API** — цепочечный построитель запросов с `Where`, `OrderBy`, `Limit`, `Offset`
 - **Keyset-пагинация** — курсорная пагинация через `Page` / `After` / `Before`
@@ -90,7 +91,7 @@ import (
 
 var userTable = repository.Table{
     Name:       "users",
-    PrimaryKey: "id",
+    PrimaryKey: []string{"id"},
     Columns:    []string{"id", "name", "email"},
 }
 
@@ -177,6 +178,7 @@ func main() {
 
 - [Диалекты](#диалекты)
 - [Описание таблицы](#описание-таблицы)
+- [Составной первичный ключ](#составной-первичный-ключ)
 - [Маппинг: Simple и Composite](#маппинг-simple-и-composite)
 - [CRUD-операции](#crud-операции)
 - [Спецификации (Spec)](#спецификации-spec)
@@ -217,7 +219,7 @@ repo := repository.New(db, repository.Postgres(), mapping)
 ```go
 repository.Table{
     Name:       "users",           // имя таблицы
-    PrimaryKey: "id",              // первичный ключ
+    PrimaryKey: []string{"id"},    // первичный ключ (одиночный или составной)
     Columns:    []string{          // все колонки (порядок важен — совпадает с Scan и Values)
         "id", "name", "email", "version", "created_at", "updated_at",
     },
@@ -231,6 +233,92 @@ repository.Table{
 ```
 
 Поля `CreatedAt` и `UpdatedAt` **не передаются** в `Values` — они заполняются на уровне SQL автоматически. Колонка `VersionColumn` **передаётся** в `Values`, а при UPDATE автоматически инкрементируется на уровне SQL.
+
+---
+
+## Составной первичный ключ
+
+Для таблиц-связок и других случаев, когда первичный ключ состоит из нескольких колонок:
+
+```go
+var accountRoleTable = repository.Table{
+    Name:       "account_roles",
+    PrimaryKey: []string{"account_id", "role_id"}, // составной ключ
+    Columns:    []string{"account_id", "role_id"},
+    CreatedAt:  "assigned_at",
+}
+```
+
+### Как это работает
+
+| Операция | Генерируемый SQL (PostgreSQL) |
+|----------|-------------------------------|
+| `Save` | `INSERT INTO account_roles (...) VALUES (...) ON CONFLICT (account_id, role_id) DO NOTHING` |
+| `Delete` | `DELETE FROM account_roles WHERE account_id = $1 AND role_id = $2` |
+| `Find` | `SELECT ... FROM account_roles WHERE (account_id = $1) AND (role_id = $2)` |
+
+Если все колонки таблицы являются частью первичного ключа (нечего обновлять), генерируется `DO NOTHING` (PostgreSQL/SQLite) или `INSERT IGNORE` (MySQL).
+
+### Использование `Find` и `Delete` с составным ключом
+
+Методы `Find` и `Delete` принимают variadic-аргументы — количество должно совпадать с количеством колонок в `PrimaryKey`:
+
+```go
+// Одиночный PK
+user, err := repo.Find(ctx, "u-1")
+err = repo.Delete(ctx, "u-1")
+
+// Составной PK — аргументы в порядке объявления PrimaryKey
+role, err := repo.Find(ctx, accountID, roleID)
+err = repo.Delete(ctx, accountID, roleID)
+```
+
+При несовпадении количества аргументов возвращается ошибка.
+
+### Полный пример: связующая таблица
+
+```go
+var accountRoleTable = repository.Table{
+    Name:       "account_roles",
+    PrimaryKey: []string{"account_id", "role_id"},
+    Columns:    []string{"account_id", "role_id"},
+    CreatedAt:  "assigned_at",
+}
+
+func NewAccountRoleRepository(db *sql.DB) *repository.Repository[*AccountRole] {
+    return repository.New(db, repository.Postgres(), repository.Simple(
+        repository.SimpleConfig[*AccountRole]{
+            Table: accountRoleTable,
+            Scan: func(sc repository.Scanner) (*AccountRole, error) {
+                var accountID, roleID string
+                if err := sc.Scan(&accountID, &roleID); err != nil {
+                    return nil, err
+                }
+                return NewAccountRole(accountID, roleID), nil
+            },
+            Values: func(ar *AccountRole) []any {
+                return []any{ar.AccountID(), ar.RoleID()}
+            },
+        },
+    ))
+}
+
+// Использование
+repo := NewAccountRoleRepository(db)
+err := repo.Save(ctx, role)                            // INSERT ... ON CONFLICT DO NOTHING
+err = repo.Delete(ctx, accountID, roleID)              // DELETE WHERE account_id = $1 AND role_id = $2
+roles, err := repo.FindBy(ctx, repository.Eq("account_id", accountID))  // SELECT WHERE account_id = $1
+```
+
+### Keyset-пагинация с составным PK
+
+При использовании `Page` все колонки первичного ключа автоматически добавляются в `ORDER BY` для гарантии детерминированного порядка:
+
+```go
+// PrimaryKey: []string{"account_id", "role_id"}
+// ORDER BY автоматически получит: ORDER BY account_id ASC, role_id ASC
+page, err := repo.Query(ctx).PageSize(20).Page(extractor)
+```
 
 ---
 
@@ -292,10 +380,14 @@ repo := repository.New(db, repository.Postgres(), mapping)
 ### Find — поиск по ID
 
 ```go
+// Одиночный PK
 user, err := repo.Find(ctx, "u-1")
 if errors.Is(err, repository.ErrNotFound) {
     // не найден
 }
+
+// Составной PK
+role, err := repo.Find(ctx, accountID, roleID)
 ```
 
 ### FindBy — поиск по спецификации
@@ -328,12 +420,16 @@ count, err := repo.CountBy(ctx, repository.Eq("status", "active"))
 err := repo.Save(ctx, user)
 ```
 
-Генерирует `INSERT ... ON CONFLICT DO UPDATE` (PostgreSQL/SQLite) или `INSERT ... ON DUPLICATE KEY UPDATE` (MySQL).
+Генерирует `INSERT ... ON CONFLICT DO UPDATE` (PostgreSQL/SQLite) или `INSERT ... ON DUPLICATE KEY UPDATE` (MySQL). Если все колонки являются частью первичного ключа, генерируется `DO NOTHING` / `INSERT IGNORE`.
 
 ### Delete — удаление по ID
 
 ```go
+// Одиночный PK
 err := repo.Delete(ctx, "u-1")
+
+// Составной PK
+err := repo.Delete(ctx, accountID, roleID)
 ```
 
 При включённом Soft Delete выполняет `UPDATE ... SET deleted_at = NOW()`.
@@ -562,7 +658,7 @@ page, err := repo.Query(ctx).
 
 Курсор — это Base64-кодированный JSON с значениями колонок сортировки последнего элемента. При следующем запросе эти значения используются для построения Keyset-условия (`created_at < $1 OR (created_at = $1 AND id > $2)`).
 
-Первичный ключ автоматически добавляется в `ORDER BY`, если отсутствует, для гарантии детерминированного порядка.
+Все колонки первичного ключа автоматически добавляются в `ORDER BY`, если отсутствуют, для гарантии детерминированного порядка. Для составных ключей добавляются все компоненты.
 
 ### Использование в HTTP-API
 
@@ -602,7 +698,7 @@ func ListUsersHandler(repo *repository.Repository[*User]) http.HandlerFunc {
 ```go
 var userTable = repository.Table{
     Name:       "users",
-    PrimaryKey: "id",
+    PrimaryKey: []string{"id"},
     Columns:    []string{"id", "name", "email"},
     SoftDelete: "deleted_at",
 }
@@ -621,7 +717,7 @@ var userTable = repository.Table{
 ```go
 var userTable = repository.Table{
     Name:          "users",
-    PrimaryKey:    "id",
+    PrimaryKey:    []string{"id"},
     Columns:       []string{"id", "name", "email", "version"},
     VersionColumn: "version",
 }
@@ -662,6 +758,12 @@ if err := profileRepo.SaveTx(ctx, tx, profile); err != nil {
 return tx.Commit()
 ```
 
+`DeleteTx` также поддерживает составной ключ:
+
+```go
+err := repo.DeleteTx(ctx, tx, accountID, roleID)
+```
+
 ### Автоматические транзакции для Composite
 
 При сохранении составных агрегатов с `Save` (не `SaveTx`) транзакция создаётся автоматически, если репозиторий создан с `*sql.DB`. Все дочерние операции выполняются в одной транзакции.
@@ -678,9 +780,9 @@ Composite-маппинг предназначен для агрегатов, д�
 
 ```go
 var orderTable = repository.Table{
-    Name:       "orders",
-    PrimaryKey: "id",
-    Columns:    []string{"id", "customer_id", "status", "version"},
+    Name:          "orders",
+    PrimaryKey:    []string{"id"},
+    Columns:       []string{"id", "customer_id", "status", "version"},
     VersionColumn: "version",
 }
 
@@ -897,7 +999,7 @@ func RestoreArticle(s ArticleSnapshot) *Article {
 
 var articleTable = repo.Table{
     Name:          "articles",
-    PrimaryKey:    "id",
+    PrimaryKey:    []string{"id"},
     Columns:       []string{"id", "title", "status", "version"},
     VersionColumn: "version",
     SoftDelete:    "deleted_at",
@@ -982,14 +1084,14 @@ func main() {
 
 | Метод | Описание |
 |-------|----------|
-| `Find(ctx, id) (T, error)` | Поиск по первичному ключу |
+| `Find(ctx, ids ...any) (T, error)` | Поиск по первичному ключу (одиночному или составному) |
 | `FindBy(ctx, Spec) ([]T, error)` | Поиск по спецификации |
 | `ExistsBy(ctx, Spec) (bool, error)` | Проверка существования |
 | `CountBy(ctx, Spec) (int64, error)` | Подсчёт записей |
 | `Save(ctx, T) error` | Upsert агрегата |
 | `SaveTx(ctx, *sql.Tx, T) error` | Upsert в транзакции |
-| `Delete(ctx, id) error` | Удаление по ID |
-| `DeleteTx(ctx, *sql.Tx, id) error` | Удаление в транзакции |
+| `Delete(ctx, ids ...any) error` | Удаление по первичному ключу |
+| `DeleteTx(ctx, *sql.Tx, ids ...any) error` | Удаление в транзакции |
 | `Query(ctx) *Query[T]` | Fluent-построитель запросов |
 
 ### Query[T]
@@ -1008,6 +1110,18 @@ func main() {
 | `Count() (int64, error)` | Количество |
 | `Exists() (bool, error)` | Существование |
 | `Page(CursorExtractor[T]) (*Page[T], error)` | Страница с курсором |
+
+### Table
+
+| Поле | Тип | Описание |
+|------|-----|----------|
+| `Name` | `string` | Имя таблицы |
+| `PrimaryKey` | `[]string` | Колонки первичного ключа |
+| `Columns` | `[]string` | Все колонки |
+| `VersionColumn` | `string` | Колонка версии (Optimistic Locking) |
+| `SoftDelete` | `string` | Колонка мягкого удаления |
+| `CreatedAt` | `string` | Колонка времени создания |
+| `UpdatedAt` | `string` | Колонка времени обновления |
 
 ### Спецификации
 

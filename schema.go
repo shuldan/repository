@@ -14,7 +14,7 @@ const (
 
 type Table struct {
 	Name       string
-	PrimaryKey string
+	PrimaryKey []string
 	Columns    []string
 
 	VersionColumn string
@@ -53,13 +53,17 @@ func (t Table) upsertSQL(d Dialect) string {
 }
 
 func (t Table) deleteSQL(d Dialect) string {
-	if t.SoftDelete != "" {
-		return fmt.Sprintf("UPDATE %s SET %s = %s WHERE %s = %s AND %s IS NULL",
-			t.Name, t.SoftDelete, d.Now(),
-			t.PrimaryKey, d.Placeholder(1), t.SoftDelete)
+	whereParts := make([]string, len(t.PrimaryKey))
+	for i, pk := range t.PrimaryKey {
+		whereParts[i] = fmt.Sprintf("%s = %s", pk, d.Placeholder(i+1))
 	}
-	return fmt.Sprintf("DELETE FROM %s WHERE %s = %s",
-		t.Name, t.PrimaryKey, d.Placeholder(1))
+	where := strings.Join(whereParts, " AND ")
+
+	if t.SoftDelete != "" {
+		return fmt.Sprintf("UPDATE %s SET %s = %s WHERE %s AND %s IS NULL",
+			t.Name, t.SoftDelete, d.Now(), where, t.SoftDelete)
+	}
+	return fmt.Sprintf("DELETE FROM %s WHERE %s", t.Name, where)
 }
 
 func (r Relation) selectByFK(d Dialect) string {
@@ -99,7 +103,7 @@ func (r Relation) insertSQL(d Dialect) string {
 }
 
 func (r Relation) upsertSQL(d Dialect) string {
-	return d.UpsertSQL(r.Table, r.PrimaryKey, r.Columns, UpsertOptions{})
+	return d.UpsertSQL(r.Table, []string{r.PrimaryKey}, r.Columns, UpsertOptions{})
 }
 
 func (r Relation) batchInsertSQL(d Dialect, rowCount int) string {

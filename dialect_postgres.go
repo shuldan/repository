@@ -7,7 +7,6 @@ import (
 
 type postgresDialect struct{}
 
-// Postgres возвращает диалект PostgreSQL.
 func Postgres() Dialect { return &postgresDialect{} }
 
 func (d *postgresDialect) Placeholder(n int) string      { return fmt.Sprintf("$%d", n) }
@@ -15,7 +14,9 @@ func (d *postgresDialect) Now() string                   { return "NOW()" }
 func (d *postgresDialect) ILikeOp() string               { return "ILIKE" }
 func (d *postgresDialect) QuoteIdent(name string) string { return `"` + name + `"` }
 
-func (d *postgresDialect) UpsertSQL(table, pk string, columns []string, opts UpsertOptions) string {
+func (d *postgresDialect) UpsertSQL(table string, pks []string, columns []string, opts UpsertOptions) string {
+	pkSet := makeSet(pks)
+
 	insertCols := make([]string, 0, len(columns)+2)
 	insertCols = append(insertCols, columns...)
 
@@ -41,7 +42,7 @@ func (d *postgresDialect) UpsertSQL(table, pk string, columns []string, opts Ups
 
 	setClauses := make([]string, 0, len(columns)+1)
 	for _, col := range columns {
-		if col == pk {
+		if pkSet[col] {
 			continue
 		}
 		if col == opts.VersionColumn && opts.VersionColumn != "" {
@@ -57,8 +58,14 @@ func (d *postgresDialect) UpsertSQL(table, pk string, columns []string, opts Ups
 			fmt.Sprintf("%s = %s", opts.UpdatedAt, d.Now()))
 	}
 
+	pkList := strings.Join(pks, ", ")
+
+	if len(setClauses) == 0 {
+		return insert + fmt.Sprintf(" ON CONFLICT (%s) DO NOTHING", pkList)
+	}
+
 	conflict := fmt.Sprintf(" ON CONFLICT (%s) DO UPDATE SET %s",
-		pk, strings.Join(setClauses, ", "))
+		pkList, strings.Join(setClauses, ", "))
 
 	if opts.VersionColumn != "" {
 		conflict += fmt.Sprintf(" WHERE %s.%s = EXCLUDED.%s",

@@ -49,9 +49,9 @@ func (d *simpleDriver[T]) save(ctx context.Context, _ TxBeginner, exec Executor,
 }
 
 //nolint:unused
-func (d *simpleDriver[T]) delete(ctx context.Context, _ TxBeginner, exec Executor, id string) error {
+func (d *simpleDriver[T]) delete(ctx context.Context, _ TxBeginner, exec Executor, ids []any) error {
 	query := d.table.deleteSQL(d.dialect)
-	_, err := exec.ExecContext(ctx, query, id)
+	_, err := exec.ExecContext(ctx, query, ids...)
 	return err
 }
 

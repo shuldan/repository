@@ -158,7 +158,7 @@ func (f *fakeTxBeginner) BeginTx(_ context.Context, _ *sql.TxOptions) (*sql.Tx, 
 
 var simpleTable = Table{
 	Name:       "items",
-	PrimaryKey: "id",
+	PrimaryKey: []string{"id"},
 	Columns:    []string{"id"},
 }
 
@@ -204,7 +204,7 @@ func compositeExtractPK(s *tSnap) string { return s.id }
 
 var compositeTable = Table{
 	Name:       "orders",
-	PrimaryKey: "id",
+	PrimaryKey: []string{"id"},
 	Columns:    []string{"id", "name"},
 }
 

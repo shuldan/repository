@@ -14,7 +14,9 @@ func (d *mysqlDialect) Now() string                   { return "NOW()" }
 func (d *mysqlDialect) ILikeOp() string               { return "LIKE" }
 func (d *mysqlDialect) QuoteIdent(name string) string { return "`" + name + "`" }
 
-func (d *mysqlDialect) UpsertSQL(table, pk string, columns []string, opts UpsertOptions) string {
+func (d *mysqlDialect) UpsertSQL(table string, pks []string, columns []string, opts UpsertOptions) string {
+	pkSet := makeSet(pks)
+
 	insertCols := make([]string, 0, len(columns)+2)
 	insertCols = append(insertCols, columns...)
 
@@ -40,7 +42,7 @@ func (d *mysqlDialect) UpsertSQL(table, pk string, columns []string, opts Upsert
 
 	setClauses := make([]string, 0, len(columns)+1)
 	for _, col := range columns {
-		if col == pk {
+		if pkSet[col] {
 			continue
 		}
 		if col == opts.VersionColumn && opts.VersionColumn != "" {
@@ -54,6 +56,10 @@ func (d *mysqlDialect) UpsertSQL(table, pk string, columns []string, opts Upsert
 	if opts.UpdatedAt != "" {
 		setClauses = append(setClauses,
 			fmt.Sprintf("%s = %s", opts.UpdatedAt, d.Now()))
+	}
+
+	if len(setClauses) == 0 {
+		return strings.Replace(insert, "INSERT INTO", "INSERT IGNORE INTO", 1)
 	}
 
 	return insert + " ON DUPLICATE KEY UPDATE " + strings.Join(setClauses, ", ")

@@ -9,7 +9,7 @@ func TestSimpleMapping_Configure(t *testing.T) {
 	cfg := SimpleConfig[string]{
 		Table: Table{
 			Name:       "test",
-			PrimaryKey: "id",
+			PrimaryKey: []string{"id"},
 			Columns:    []string{"id", "val"},
 		},
 		Scan:   func(sc Scanner) (string, error) { return "", nil },
@@ -30,7 +30,7 @@ func TestCompositeMapping_Configure(t *testing.T) {
 	cfg := CompositeConfig[string, string]{
 		Table: Table{
 			Name:       "composite",
-			PrimaryKey: "id",
+			PrimaryKey: []string{"id"},
 			Columns:    []string{"id"},
 		},
 		Relations: []Relation{},

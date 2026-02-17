@@ -47,7 +47,7 @@ func TestPostgresDialect_QuoteIdent(t *testing.T) {
 func TestPostgresDialect_UpsertSQL_Basic(t *testing.T) {
 	t.Parallel()
 	d := Postgres()
-	sql := d.UpsertSQL("users", "id", []string{"id", "name"}, UpsertOptions{})
+	sql := d.UpsertSQL("users", []string{"id"}, []string{"id", "name"}, UpsertOptions{})
 	if !strings.Contains(sql, "ON CONFLICT (id) DO UPDATE SET") {
 		t.Errorf("expected ON CONFLICT, got %q", sql)
 	}
@@ -64,7 +64,7 @@ func TestPostgresDialect_UpsertSQL_WithVersion(t *testing.T) {
 		CreatedAt:     "created_at",
 		UpdatedAt:     "updated_at",
 	}
-	sql := d.UpsertSQL("users", "id", []string{"id", "name", "version"}, opts)
+	sql := d.UpsertSQL("users", []string{"id"}, []string{"id", "name", "version"}, opts)
 	if !strings.Contains(sql, "version = users.version + 1") {
 		t.Errorf("expected version increment, got %q", sql)
 	}
@@ -77,7 +77,7 @@ func TestPostgresDialect_UpsertSQL_NoVersion(t *testing.T) {
 	t.Parallel()
 	d := Postgres()
 	opts := UpsertOptions{CreatedAt: "created_at", UpdatedAt: "updated_at"}
-	sql := d.UpsertSQL("t", "id", []string{"id", "name"}, opts)
+	sql := d.UpsertSQL("t", []string{"id"}, []string{"id", "name"}, opts)
 	if strings.Contains(sql, "WHERE") {
 		t.Errorf("unexpected WHERE for no version, got %q", sql)
 	}

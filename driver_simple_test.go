@@ -11,7 +11,7 @@ import (
 
 func TestSimpleDriver_CheckVersion_NoVersionCol(t *testing.T) {
 	t.Parallel()
-	d := &simpleDriver[string]{table: Table{Name: "t", PrimaryKey: "id"}}
+	d := &simpleDriver[string]{table: Table{Name: "t", PrimaryKey: []string{"id"}}}
 	if err := d.checkVersion(&fakeResult{rowsAffected: 0}); err != nil {
 		t.Errorf("expected nil, got %v", err)
 	}
@@ -19,7 +19,7 @@ func TestSimpleDriver_CheckVersion_NoVersionCol(t *testing.T) {
 
 func TestSimpleDriver_CheckVersion_RowsAffected(t *testing.T) {
 	t.Parallel()
-	d := &simpleDriver[string]{table: Table{Name: "t", PrimaryKey: "id", VersionColumn: "v"}}
+	d := &simpleDriver[string]{table: Table{Name: "t", PrimaryKey: []string{"id"}, VersionColumn: "v"}}
 	if err := d.checkVersion(&fakeResult{rowsAffected: 1}); err != nil {
 		t.Errorf("expected nil, got %v", err)
 	}
@@ -27,15 +27,15 @@ func TestSimpleDriver_CheckVersion_RowsAffected(t *testing.T) {
 
 func TestSimpleDriver_CheckVersion_Zero(t *testing.T) {
 	t.Parallel()
-	d := &simpleDriver[string]{table: Table{Name: "t", PrimaryKey: "id", VersionColumn: "v"}}
-	if err := d.checkVersion(&fakeResult{rowsAffected: 0}); err != ErrConcurrentModification {
+	d := &simpleDriver[string]{table: Table{Name: "t", PrimaryKey: []string{"id"}, VersionColumn: "v"}}
+	if err := d.checkVersion(&fakeResult{rowsAffected: 0}); !errors.Is(err, ErrConcurrentModification) {
 		t.Errorf("expected ErrConcurrentModification, got %v", err)
 	}
 }
 
 func TestSimpleDriver_CheckVersion_Error(t *testing.T) {
 	t.Parallel()
-	d := &simpleDriver[string]{table: Table{Name: "t", PrimaryKey: "id", VersionColumn: "v"}}
+	d := &simpleDriver[string]{table: Table{Name: "t", PrimaryKey: []string{"id"}, VersionColumn: "v"}}
 	if err := d.checkVersion(&fakeResult{err: fmt.Errorf("fail")}); err == nil {
 		t.Error("expected error")
 	}
@@ -137,12 +137,12 @@ func TestSimpleDriver_Save_ExecError(t *testing.T) {
 
 func TestSimpleDriver_Save_VersionConflict(t *testing.T) {
 	t.Parallel()
-	tbl := Table{Name: "t", PrimaryKey: "id", Columns: []string{"id"}, VersionColumn: "v"}
+	tbl := Table{Name: "t", PrimaryKey: []string{"id"}, Columns: []string{"id"}, VersionColumn: "v"}
 	conn := &testConn{execs: []testExecResult{{rowsAffected: 0}}}
 	db := newTestDB(t, conn)
 	d := &simpleDriver[string]{table: tbl, dialect: Postgres(), scan: simpleScan, values: simpleValues}
 	err := d.save(context.Background(), nil, db, "val")
-	if err != ErrConcurrentModification {
+	if !errors.Is(err, ErrConcurrentModification) {
 		t.Errorf("expected ErrConcurrentModification, got %v", err)
 	}
 }
@@ -152,7 +152,9 @@ func TestSimpleDriver_Delete_Success(t *testing.T) {
 	conn := &testConn{execs: []testExecResult{{rowsAffected: 1}}}
 	db := newTestDB(t, conn)
 	d := &simpleDriver[string]{table: simpleTable, dialect: Postgres()}
-	err := d.delete(context.Background(), nil, db, "id1")
+	var ids []any
+	ids = append(ids, "id1")
+	err := d.delete(context.Background(), nil, db, ids)
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}

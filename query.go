@@ -131,7 +131,6 @@ func (q *Query[T]) Page(extract CursorExtractor[T]) (*Page[T], error) {
 	spec := q.combinedSpec()
 	spec = q.repo.withSoftDelete(spec)
 
-	// Keyset-условие из курсора
 	if q.cursor != "" {
 		cur, err := DecodeCursor(q.cursor)
 		if err != nil {
@@ -198,13 +197,17 @@ func (q *Query[T]) ensurePKOrder() []orderClause {
 	orders := make([]orderClause, len(q.orderCols))
 	copy(orders, q.orderCols)
 
-	pk := q.repo.table.PrimaryKey
+	existing := make(map[string]bool, len(orders))
 	for _, o := range orders {
-		if o.column == pk {
-			return orders
+		existing[o.column] = true
+	}
+
+	for _, pk := range q.repo.table.PrimaryKey {
+		if !existing[pk] {
+			orders = append(orders, orderClause{column: pk, dir: Asc})
 		}
 	}
-	return append(orders, orderClause{column: pk, dir: Asc})
+	return orders
 }
 
 func (q *Query[T]) buildSQL() (string, []any) {

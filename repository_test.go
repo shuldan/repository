@@ -169,7 +169,7 @@ func TestRepository_Delete_Success(t *testing.T) {
 
 func TestRepository_WithSoftDelete_NoSoftDelete(t *testing.T) {
 	t.Parallel()
-	r := &Repository[string]{table: Table{Name: "t", PrimaryKey: "id"}}
+	r := &Repository[string]{table: Table{Name: "t", PrimaryKey: []string{"id"}}}
 	original := Eq("x", 1)
 	if r.withSoftDelete(original) != original {
 		t.Error("expected same spec")
@@ -178,7 +178,7 @@ func TestRepository_WithSoftDelete_NoSoftDelete(t *testing.T) {
 
 func TestRepository_WithSoftDelete_NilSpec(t *testing.T) {
 	t.Parallel()
-	r := &Repository[string]{table: Table{Name: "t", PrimaryKey: "id", SoftDelete: "del"}}
+	r := &Repository[string]{table: Table{Name: "t", PrimaryKey: []string{"id"}, SoftDelete: "del"}}
 	result := r.withSoftDelete(nil)
 	if result == nil {
 		t.Fatal("expected non-nil")
@@ -191,7 +191,7 @@ func TestRepository_WithSoftDelete_NilSpec(t *testing.T) {
 
 func TestRepository_WithSoftDelete_WithSpec(t *testing.T) {
 	t.Parallel()
-	r := &Repository[string]{table: Table{Name: "t", PrimaryKey: "id", SoftDelete: "del"}}
+	r := &Repository[string]{table: Table{Name: "t", PrimaryKey: []string{"id"}, SoftDelete: "del"}}
 	result := r.withSoftDelete(Eq("x", 1))
 	if result == nil {
 		t.Fatal("expected non-nil")
@@ -212,7 +212,7 @@ func TestRepository_Query_ReturnsQuery(t *testing.T) {
 
 func TestRepository_Find_WithSoftDelete(t *testing.T) {
 	t.Parallel()
-	tbl := Table{Name: "t", PrimaryKey: "id", Columns: []string{"id"}, SoftDelete: "del"}
+	tbl := Table{Name: "t", PrimaryKey: []string{"id"}, Columns: []string{"id"}, SoftDelete: "del"}
 	conn := &testConn{queries: []testQueryResult{
 		{columns: []string{"id"}, rows: [][]sqlDriver.Value{{"a"}}},
 	}}

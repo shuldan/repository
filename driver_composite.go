@@ -185,36 +185,38 @@ func (d *compositeDriver[T, S]) saveWithChildren(
 
 //nolint:unused
 func (d *compositeDriver[T, S]) delete(
-	ctx context.Context, db TxBeginner, exec Executor, id string,
+	ctx context.Context, db TxBeginner, exec Executor, ids []any,
 ) error {
 	if d.table.SoftDelete != "" || len(d.relations) == 0 {
 		query := d.table.deleteSQL(d.dialect)
-		_, err := exec.ExecContext(ctx, query, id)
+		_, err := exec.ExecContext(ctx, query, ids...)
 		return err
 	}
 
 	if db != nil {
 		return inTx(ctx, db, func(tx *sql.Tx) error {
-			return d.deleteWithChildren(ctx, tx, id)
+			return d.deleteWithChildren(ctx, tx, ids)
 		})
 	}
 
-	return d.deleteWithChildren(ctx, exec, id)
+	return d.deleteWithChildren(ctx, exec, ids)
 }
 
 //nolint:unused
 func (d *compositeDriver[T, S]) deleteWithChildren(
-	ctx context.Context, exec Executor, id string,
+	ctx context.Context, exec Executor, ids []any,
 ) error {
+	fkValue := ids[0]
+
 	for i := len(d.relations) - 1; i >= 0; i-- {
 		rel := d.relations[i]
 		delQuery := rel.deleteByFK(d.dialect)
-		if _, err := exec.ExecContext(ctx, delQuery, id); err != nil {
+		if _, err := exec.ExecContext(ctx, delQuery, fkValue); err != nil {
 			return fmt.Errorf("delete children %s: %w", rel.Table, err)
 		}
 	}
 	rootQuery := d.table.deleteSQL(d.dialect)
-	_, err := exec.ExecContext(ctx, rootQuery, id)
+	_, err := exec.ExecContext(ctx, rootQuery, ids...)
 	return err
 }
 

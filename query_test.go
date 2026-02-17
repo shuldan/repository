@@ -58,7 +58,7 @@ func TestQuery_CombinedSpec_Multiple(t *testing.T) {
 
 func TestQuery_EnsurePKOrder_AlreadyPresent(t *testing.T) {
 	t.Parallel()
-	r := &Repository[string]{table: Table{PrimaryKey: "id"}}
+	r := &Repository[string]{table: Table{PrimaryKey: []string{"id"}}}
 	q := &Query[string]{repo: r, orderCols: []orderClause{{column: "id", dir: Desc}}}
 	if len(q.ensurePKOrder()) != 1 {
 		t.Error("should not add duplicate PK")
@@ -67,7 +67,7 @@ func TestQuery_EnsurePKOrder_AlreadyPresent(t *testing.T) {
 
 func TestQuery_EnsurePKOrder_NotPresent(t *testing.T) {
 	t.Parallel()
-	r := &Repository[string]{table: Table{PrimaryKey: "id"}}
+	r := &Repository[string]{table: Table{PrimaryKey: []string{"id"}}}
 	q := &Query[string]{repo: r, orderCols: []orderClause{{column: "name", dir: Asc}}}
 	orders := q.ensurePKOrder()
 	if len(orders) != 2 || orders[1].column != "id" {
@@ -311,7 +311,7 @@ func TestQuery_BuildSQL_WithSpecOrderLimitOffset(t *testing.T) {
 
 func TestQuery_Page_WithSoftDelete(t *testing.T) {
 	t.Parallel()
-	tbl := Table{Name: "t", PrimaryKey: "id", Columns: []string{"id"}, SoftDelete: "del"}
+	tbl := Table{Name: "t", PrimaryKey: []string{"id"}, Columns: []string{"id"}, SoftDelete: "del"}
 	conn := &testConn{queries: []testQueryResult{
 		{columns: []string{"id"}, rows: [][]sqlDriver.Value{{"a"}}},
 	}}

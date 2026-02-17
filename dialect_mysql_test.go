@@ -40,7 +40,7 @@ func TestMysqlDialect_QuoteIdent(t *testing.T) {
 func TestMysqlDialect_UpsertSQL_Basic(t *testing.T) {
 	t.Parallel()
 	d := MySQL()
-	sql := d.UpsertSQL("users", "id", []string{"id", "name"}, UpsertOptions{})
+	sql := d.UpsertSQL("users", []string{"id"}, []string{"id", "name"}, UpsertOptions{})
 	if !strings.Contains(sql, "INSERT INTO users") {
 		t.Errorf("expected INSERT INTO, got %q", sql)
 	}
@@ -60,7 +60,7 @@ func TestMysqlDialect_UpsertSQL_WithOptions(t *testing.T) {
 		CreatedAt:     "created_at",
 		UpdatedAt:     "updated_at",
 	}
-	sql := d.UpsertSQL("users", "id", []string{"id", "name", "version"}, opts)
+	sql := d.UpsertSQL("users", []string{"id"}, []string{"id", "name", "version"}, opts)
 	if !strings.Contains(sql, "created_at") {
 		t.Error("expected created_at in SQL")
 	}

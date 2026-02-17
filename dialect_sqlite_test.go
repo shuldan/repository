@@ -36,7 +36,7 @@ func TestSqliteDialect_QuoteIdent(t *testing.T) {
 func TestSqliteDialect_UpsertSQL_Basic(t *testing.T) {
 	t.Parallel()
 	d := SQLite()
-	sql := d.UpsertSQL("users", "id", []string{"id", "name"}, UpsertOptions{})
+	sql := d.UpsertSQL("users", []string{"id"}, []string{"id", "name"}, UpsertOptions{})
 	if !strings.Contains(sql, "ON CONFLICT(id) DO UPDATE SET") {
 		t.Errorf("expected ON CONFLICT, got %q", sql)
 	}
@@ -53,7 +53,7 @@ func TestSqliteDialect_UpsertSQL_WithOptions(t *testing.T) {
 		CreatedAt:     "created_at",
 		UpdatedAt:     "updated_at",
 	}
-	sql := d.UpsertSQL("t", "id", []string{"id", "name", "version"}, opts)
+	sql := d.UpsertSQL("t", []string{"id"}, []string{"id", "name", "version"}, opts)
 	if !strings.Contains(sql, "version = version + 1") {
 		t.Errorf("expected version inc, got %q", sql)
 	}
@@ -66,7 +66,7 @@ func TestSqliteDialect_UpsertSQL_NoVersion(t *testing.T) {
 	t.Parallel()
 	d := SQLite()
 	opts := UpsertOptions{CreatedAt: "ca", UpdatedAt: "ua"}
-	sql := d.UpsertSQL("t", "id", []string{"id", "name"}, opts)
+	sql := d.UpsertSQL("t", []string{"id"}, []string{"id", "name"}, opts)
 	if strings.Contains(sql, "WHERE") {
 		t.Errorf("unexpected WHERE, got %q", sql)
 	}

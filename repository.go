@@ -24,8 +24,15 @@ func New[T any](db *sql.DB, dialect Dialect, mapping Mapping[T]) *Repository[T] 
 	}
 }
 
-func (r *Repository[T]) Find(ctx context.Context, id string) (T, error) {
-	spec := r.withSoftDelete(Eq(r.table.PrimaryKey, id))
+func (r *Repository[T]) Find(ctx context.Context, ids ...any) (T, error) {
+	var zero T
+	if len(ids) != len(r.table.PrimaryKey) {
+		return zero, fmt.Errorf("expected %d primary key value(s), got %d",
+			len(r.table.PrimaryKey), len(ids))
+	}
+
+	pkSpec := r.buildPKSpec(ids)
+	spec := r.withSoftDelete(pkSpec)
 	condition, args, _ := spec.ToSQL(r.dialect, 1)
 	query := r.table.selectWhere(condition)
 
@@ -102,12 +109,20 @@ func (r *Repository[T]) SaveTx(ctx context.Context, tx *sql.Tx, aggregate T) err
 	return r.driver.save(ctx, nil, tx, aggregate)
 }
 
-func (r *Repository[T]) Delete(ctx context.Context, id string) error {
-	return r.driver.delete(ctx, r.db, r.db, id)
+func (r *Repository[T]) Delete(ctx context.Context, ids ...any) error {
+	if len(ids) != len(r.table.PrimaryKey) {
+		return fmt.Errorf("expected %d primary key value(s), got %d",
+			len(r.table.PrimaryKey), len(ids))
+	}
+	return r.driver.delete(ctx, r.db, r.db, ids)
 }
 
-func (r *Repository[T]) DeleteTx(ctx context.Context, tx *sql.Tx, id string) error {
-	return r.driver.delete(ctx, nil, tx, id)
+func (r *Repository[T]) DeleteTx(ctx context.Context, tx *sql.Tx, ids ...any) error {
+	if len(ids) != len(r.table.PrimaryKey) {
+		return fmt.Errorf("expected %d primary key value(s), got %d",
+			len(r.table.PrimaryKey), len(ids))
+	}
+	return r.driver.delete(ctx, nil, tx, ids)
 }
 
 func (r *Repository[T]) Query(ctx context.Context) *Query[T] {
@@ -127,4 +142,15 @@ func (r *Repository[T]) withSoftDelete(s Spec) Spec {
 		return sd
 	}
 	return And(sd, s)
+}
+
+func (r *Repository[T]) buildPKSpec(ids []any) Spec {
+	if len(ids) == 1 {
+		return Eq(r.table.PrimaryKey[0], ids[0])
+	}
+	specs := make([]Spec, len(ids))
+	for i, pk := range r.table.PrimaryKey {
+		specs[i] = Eq(pk, ids[i])
+	}
+	return And(specs...)
 }

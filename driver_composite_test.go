@@ -224,7 +224,9 @@ func TestCompositeDriver_Delete_NoRelations(t *testing.T) {
 	conn := &testConn{execs: []testExecResult{{rowsAffected: 1}}}
 	db := newTestDB(t, conn)
 	d := newCompositeDriver(nil, compositeTable, nil)
-	err := d.delete(context.Background(), db, db, "o1")
+	var ids []any
+	ids = append(ids, "o1")
+	err := d.delete(context.Background(), db, db, ids)
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -237,7 +239,9 @@ func TestCompositeDriver_Delete_SoftDelete(t *testing.T) {
 	tbl := compositeTable
 	tbl.SoftDelete = "deleted_at"
 	d := newCompositeDriver([]Relation{itemsRelation}, tbl, nil)
-	err := d.delete(context.Background(), db, db, "o1")
+	var ids []any
+	ids = append(ids, "o1")
+	err := d.delete(context.Background(), db, db, ids)
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -251,7 +255,9 @@ func TestCompositeDriver_Delete_WithRelations_NoTx(t *testing.T) {
 	}}
 	db := newTestDB(t, conn)
 	d := newCompositeDriver([]Relation{itemsRelation}, compositeTable, nil)
-	err := d.delete(context.Background(), nil, db, "o1")
+	var ids []any
+	ids = append(ids, "o1")
+	err := d.delete(context.Background(), nil, db, ids)
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -265,7 +271,9 @@ func TestCompositeDriver_Delete_WithRelations_WithTx(t *testing.T) {
 	}}
 	db := newTestDB(t, conn)
 	d := newCompositeDriver([]Relation{itemsRelation}, compositeTable, nil)
-	err := d.delete(context.Background(), db, db, "o1")
+	var ids []any
+	ids = append(ids, "o1")
+	err := d.delete(context.Background(), db, db, ids)
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}
@@ -276,7 +284,9 @@ func TestCompositeDriver_DeleteWithChildren_Error(t *testing.T) {
 	conn := &testConn{execs: []testExecResult{{err: fmt.Errorf("del fail")}}}
 	db := newTestDB(t, conn)
 	d := newCompositeDriver([]Relation{itemsRelation}, compositeTable, nil)
-	err := d.deleteWithChildren(context.Background(), db, "o1")
+	var ids []any
+	ids = append(ids, "o1")
+	err := d.deleteWithChildren(context.Background(), db, ids)
 	if err == nil {
 		t.Error("expected error")
 	}

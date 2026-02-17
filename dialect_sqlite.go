@@ -14,7 +14,9 @@ func (d *sqliteDialect) Now() string                   { return "datetime('now')
 func (d *sqliteDialect) ILikeOp() string               { return "LIKE" }
 func (d *sqliteDialect) QuoteIdent(name string) string { return `"` + name + `"` }
 
-func (d *sqliteDialect) UpsertSQL(table, pk string, columns []string, opts UpsertOptions) string {
+func (d *sqliteDialect) UpsertSQL(table string, pks []string, columns []string, opts UpsertOptions) string {
+	pkSet := makeSet(pks)
+
 	insertCols := make([]string, 0, len(columns)+2)
 	insertCols = append(insertCols, columns...)
 
@@ -40,7 +42,7 @@ func (d *sqliteDialect) UpsertSQL(table, pk string, columns []string, opts Upser
 
 	setClauses := make([]string, 0, len(columns)+1)
 	for _, col := range columns {
-		if col == pk {
+		if pkSet[col] {
 			continue
 		}
 		if col == opts.VersionColumn && opts.VersionColumn != "" {
@@ -56,8 +58,14 @@ func (d *sqliteDialect) UpsertSQL(table, pk string, columns []string, opts Upser
 			fmt.Sprintf("%s = %s", opts.UpdatedAt, d.Now()))
 	}
 
+	pkList := strings.Join(pks, ", ")
+
+	if len(setClauses) == 0 {
+		return insert + fmt.Sprintf(" ON CONFLICT(%s) DO NOTHING", pkList)
+	}
+
 	conflict := fmt.Sprintf(" ON CONFLICT(%s) DO UPDATE SET %s",
-		pk, strings.Join(setClauses, ", "))
+		pkList, strings.Join(setClauses, ", "))
 
 	if opts.VersionColumn != "" {
 		conflict += fmt.Sprintf(" WHERE %s = excluded.%s",
