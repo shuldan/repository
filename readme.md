@@ -61,17 +61,20 @@ func (u *User) ID() string    { return u.id }
 func (u *User) Name() string  { return u.name }
 func (u *User) Email() string { return u.email }
 
+// UserSnapshot — плоское представление для персистентности
 type UserSnapshot struct {
     ID    string
     Name  string
     Email string
 }
 
+// Snapshot возвращает плоский снимок агрегата
 func (u *User) Snapshot() UserSnapshot {
     return UserSnapshot{ID: u.id, Name: u.name, Email: u.email}
 }
 
-func RestoreUser(s UserSnapshot) *User {
+// Restore восстанавливает агрегат из снимка
+func (s UserSnapshot) Restore() *User {
     return &User{id: s.ID, name: s.Name, email: s.Email}
 }
 ```
@@ -100,7 +103,7 @@ func scanUser(sc repository.Scanner) (*domain.User, error) {
     if err := sc.Scan(&s.ID, &s.Name, &s.Email); err != nil {
         return nil, err
     }
-    return domain.RestoreUser(s), nil
+    return s.Restore(), nil
 }
 
 func userValues(u *domain.User) []any {
@@ -290,14 +293,15 @@ func NewAccountRoleRepository(db *sql.DB) *repository.Repository[*AccountRole] {
         repository.SimpleConfig[*AccountRole]{
             Table: accountRoleTable,
             Scan: func(sc repository.Scanner) (*AccountRole, error) {
-                var accountID, roleID string
-                if err := sc.Scan(&accountID, &roleID); err != nil {
+                var s AccountRoleSnapshot
+                if err := sc.Scan(&s.AccountID, &s.RoleID); err != nil {
                     return nil, err
                 }
-                return NewAccountRole(accountID, roleID), nil
+                return s.Restore(), nil
             },
             Values: func(ar *AccountRole) []any {
-                return []any{ar.AccountID(), ar.RoleID()}
+                s := ar.Snapshot()
+                return []any{s.AccountID, s.RoleID}
             },
         },
     ))
@@ -823,6 +827,11 @@ type OrderItemSnapshot struct {
     Quantity  int
     Price     float64
 }
+
+// Restore восстанавливает агрегат из снимка
+func (s *OrderSnapshot) Restore() (*Order, error) {
+    return RestoreOrder(s)
+}
 ```
 
 ### Реализация маппинга
@@ -856,7 +865,7 @@ func NewOrderRepository(db *sql.DB) *repository.Repository[*Order] {
             },
 
             Build: func(snap *OrderSnapshot) (*Order, error) {
-                return RestoreOrder(snap)
+                return snap.Restore()
             },
 
             Decompose: func(o *Order) repository.CompositeValues {
@@ -982,16 +991,19 @@ func (a *Article) ID() string      { return a.id }
 func (a *Article) Title() string   { return a.title }
 func (a *Article) Publish()        { a.status = "published" }
 
+// ArticleSnapshot — плоское представление для персистентности
 type ArticleSnapshot struct {
     ID, Title, Status string
     Version           int
 }
 
+// Snapshot возвращает плоский снимок агрегата
 func (a *Article) Snapshot() ArticleSnapshot {
     return ArticleSnapshot{a.id, a.title, a.status, a.version}
 }
 
-func RestoreArticle(s ArticleSnapshot) *Article {
+// Restore восстанавливает агрегат из снимка
+func (s ArticleSnapshot) Restore() *Article {
     return &Article{id: s.ID, title: s.Title, status: s.Status, version: s.Version}
 }
 
@@ -1015,7 +1027,7 @@ func NewArticleRepo(db *sql.DB) *repo.Repository[*Article] {
             if err := sc.Scan(&s.ID, &s.Title, &s.Status, &s.Version); err != nil {
                 return nil, err
             }
-            return RestoreArticle(s), nil
+            return s.Restore(), nil
         },
         Values: func(a *Article) []any {
             s := a.Snapshot()
