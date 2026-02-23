@@ -21,6 +21,7 @@
 - **Мультидиалектность** — PostgreSQL, MySQL, SQLite из коробки
 - **Soft Delete** — встроенная поддержка мягкого удаления
 - **Optimistic Locking** — контроль конкурентных изменений через колонку версии
+- **Автоматические timestamps** — `created_at` / `updated_at` заполняются на уровне SQL через `NOW()`
 - **Транзакции** — `SaveTx` / `DeleteTx` для работы внутри транзакций
 - **Автоматический Upsert** — `INSERT ... ON CONFLICT` / `ON DUPLICATE KEY UPDATE`
 - **Нулевые внешние зависимости** — только `database/sql`
@@ -96,6 +97,8 @@ var userTable = repository.Table{
     Name:       "users",
     PrimaryKey: []string{"id"},
     Columns:    []string{"id", "name", "email"},
+    CreatedAt:  "created_at",
+    UpdatedAt:  "updated_at",
 }
 
 func scanUser(sc repository.Scanner) (*domain.User, error) {
@@ -181,6 +184,7 @@ func main() {
 
 - [Диалекты](#диалекты)
 - [Описание таблицы](#описание-таблицы)
+- [CreatedAt и UpdatedAt — как работают timestamps](#createdat-и-updatedat--как-работают-timestamps)
 - [Составной первичный ключ](#составной-первичный-ключ)
 - [Маппинг: Simple и Composite](#маппинг-simple-и-composite)
 - [CRUD-операции](#crud-операции)
@@ -191,6 +195,7 @@ func main() {
 - [Optimistic Locking](#optimistic-locking)
 - [Транзакции](#транзакции)
 - [Составные агрегаты (Composite)](#составные-агрегаты-composite)
+- [Чтение timestamps из БД (Read Model)](#чтение-timestamps-из-бд-read-model)
 - [Ошибки](#ошибки)
 - [Полный пример](#полный-пример)
 - [Разработка](#разработка)
@@ -223,19 +228,164 @@ repo := repository.New(db, repository.Postgres(), mapping)
 repository.Table{
     Name:       "users",           // имя таблицы
     PrimaryKey: []string{"id"},    // первичный ключ (одиночный или составной)
-    Columns:    []string{          // все колонки (порядок важен — совпадает с Scan и Values)
-        "id", "name", "email", "version", "created_at", "updated_at",
+    Columns:    []string{          // колонки для SELECT и плейсхолдеров INSERT
+        "id", "name", "email", "version",
     },
 
     // Опциональные поля:
     VersionColumn: "version",      // Optimistic Locking
     SoftDelete:    "deleted_at",   // Soft Delete
-    CreatedAt:     "created_at",   // автоматически подставляется NOW() при INSERT
-    UpdatedAt:     "updated_at",   // автоматически подставляется NOW() при INSERT и UPDATE
+    CreatedAt:     "created_at",   // автоматически NOW() при INSERT
+    UpdatedAt:     "updated_at",   // автоматически NOW() при INSERT и UPDATE
 }
 ```
 
-Поля `CreatedAt` и `UpdatedAt` **не передаются** в `Values` — они заполняются на уровне SQL автоматически. Колонка `VersionColumn` **передаётся** в `Values`, а при UPDATE автоматически инкрементируется на уровне SQL.
+### Важное правило: `Columns` vs `CreatedAt`/`UpdatedAt`
+
+`Columns` определяет:
+1. Какие колонки попадают в `SELECT` (и соответственно в `Scan`)
+2. Сколько плейсхолдеров (`$1`, `$2`, ...) генерируется в `INSERT ... VALUES`
+
+`CreatedAt` и `UpdatedAt` **добавляются к INSERT/UPDATE автоматически** как `NOW()`, **без плейсхолдера**. Они **не должны** быть в `Columns`, если вы не хотите передавать их значения вручную.
+
+```
+Columns = ["id", "name", "version"]
+                                        ┌─ Columns → плейсхолдеры
+                                        │
+INSERT INTO users (id, name, version,   created_at,   updated_at)
+              VALUES ($1, $2, $3,         NOW(),        NOW())
+                                          │              │
+                                          └── CreatedAt ─┘── UpdatedAt
+                                              (автоматически)
+
+SELECT id, name, version FROM users ...
+       └─── только Columns ───┘
+```
+
+---
+
+## CreatedAt и UpdatedAt — как работают timestamps
+
+### Принцип: домен не управляет техническими метаданными
+
+Поля `created_at` и `updated_at` — это инфраструктурные метаданные. Доменная модель (агрегат) не должна знать о них и не должна их обновлять. Библиотека заполняет их автоматически на уровне SQL через `NOW()`.
+
+```
+┌─────────────────────────────────────────────┐
+│              Domain Model                    │
+│                                              │
+│  Project { id, name, mode, phase, version }  │
+│  НЕТ created_at / updated_at                │
+│                                              │
+│  project.Rename("new name")                  │
+│  project.ChangePhase(Planning)               │
+│  // Нет project.SetUpdatedAt()              │
+└─────────────────────────────────────────────┘
+                    │
+          Snapshot / Restore
+                    │
+┌─────────────────────────────────────────────┐
+│           Infrastructure (SQL)               │
+│                                              │
+│  created_at = NOW()  — при INSERT            │
+│  updated_at = NOW()  — при INSERT и UPDATE   │
+│  version = version + 1 — при UPDATE          │
+│                                              │
+│  Домен не знает и не заботится об этом       │
+└─────────────────────────────────────────────┘
+```
+
+### Как настроить
+
+**Таблица — `created_at`/`updated_at` НЕ в `Columns`:**
+
+```go
+var projectTable = repository.Table{
+    Name:       "projects",
+    PrimaryKey: []string{"id"},
+    Columns:    []string{"id", "name", "mode", "phase", "version"},
+    // ↑ только бизнес-колонки + version
+
+    VersionColumn: "version",
+    CreatedAt:     "created_at",  // NOW() при INSERT
+    UpdatedAt:     "updated_at",  // NOW() при INSERT и UPDATE
+}
+```
+
+**Scan читает ровно `len(Columns)` значений:**
+
+```go
+func scanProject(sc repository.Scanner) (*Project, error) {
+    var s ProjectSnapshot
+    err := sc.Scan(&s.ID, &s.Name, &s.Mode, &s.Phase, &s.Version)
+    // 5 колонок = 5 значений в Scan. Без timestamps.
+    return s.Restore()
+}
+```
+
+**Values возвращает ровно `len(Columns)` значений:**
+
+```go
+func projectValues(p *Project) []any {
+    s := p.Snapshot()
+    return []any{s.ID, s.Name, s.Mode, s.Phase, s.Version}
+    // 5 значений = 5 плейсхолдеров. Без timestamps.
+}
+```
+
+**Доменная модель — без timestamps:**
+
+```go
+type Project struct {
+    id      ProjectID
+    name    string
+    mode    Mode
+    phase   Phase
+    version int
+    // НЕТ createdAt / updatedAt
+}
+
+func (p *Project) Rename(name string) error {
+    if name == "" {
+        return ErrEmptyName
+    }
+    p.name = name
+    // НЕ делаем p.updatedAt = time.Now()
+    return nil
+}
+
+type ProjectSnapshot struct {
+    ID, Name, Mode, Phase string
+    Version               int
+    // НЕТ CreatedAt / UpdatedAt
+}
+```
+
+### Генерируемый SQL (PostgreSQL)
+
+```sql
+-- Save (первый раз — INSERT):
+INSERT INTO projects (id, name, mode, phase, version, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+ON CONFLICT (id) DO UPDATE SET
+    name = EXCLUDED.name,
+    mode = EXCLUDED.mode,
+    phase = EXCLUDED.phase,
+    version = projects.version + 1,
+    updated_at = NOW()
+WHERE projects.version = EXCLUDED.version
+
+-- Find:
+SELECT id, name, mode, phase, version FROM projects WHERE id = $1
+
+-- Delete:
+DELETE FROM projects WHERE id = $1
+```
+
+Обратите внимание:
+- `created_at` заполняется **только** при INSERT, не при UPDATE
+- `updated_at` заполняется при INSERT **и** UPDATE
+- Ни то, ни другое не требует значения из Go-кода
 
 ---
 
@@ -342,8 +492,8 @@ mapping := repository.Simple(repository.SimpleConfig[*User]{
 
 | Функция | Описание |
 |---------|----------|
-| `Scan`   | Читает строку из `Scanner` (совместим с `*sql.Row` и `*sql.Rows`) и возвращает агрегат |
-| `Values` | Возвращает срез значений колонок в порядке `Table.Columns` для Upsert |
+| `Scan`   | Читает строку из `Scanner` (совместим с `*sql.Row` и `*sql.Rows`) и возвращает агрегат. Количество аргументов = `len(Table.Columns)` |
+| `Values` | Возвращает срез значений колонок в порядке `Table.Columns` для Upsert. Количество значений = `len(Table.Columns)` |
 
 ### Composite — агрегат с дочерними таблицами
 
@@ -425,6 +575,8 @@ err := repo.Save(ctx, user)
 ```
 
 Генерирует `INSERT ... ON CONFLICT DO UPDATE` (PostgreSQL/SQLite) или `INSERT ... ON DUPLICATE KEY UPDATE` (MySQL). Если все колонки являются частью первичного ключа, генерируется `DO NOTHING` / `INSERT IGNORE`.
+
+Если указаны `CreatedAt`/`UpdatedAt`, они заполняются `NOW()` автоматически.
 
 ### Delete — удаление по ID
 
@@ -615,7 +767,7 @@ exists, err := repo.Query(ctx).
 ```go
 extractor := func(u *User) map[string]any {
     s := u.Snapshot()
-    return map[string]any{"id": s.ID, "created_at": s.CreatedAt}
+    return map[string]any{"id": s.ID}
 }
 
 page, err := repo.Query(ctx).
@@ -788,6 +940,8 @@ var orderTable = repository.Table{
     PrimaryKey:    []string{"id"},
     Columns:       []string{"id", "customer_id", "status", "version"},
     VersionColumn: "version",
+    CreatedAt:     "created_at",
+    UpdatedAt:     "updated_at",
 }
 
 var orderItemsRelation = repository.Relation{
@@ -828,7 +982,6 @@ type OrderItemSnapshot struct {
     Price     float64
 }
 
-// Restore восстанавливает агрегат из снимка
 func (s *OrderSnapshot) Restore() (*Order, error) {
     return RestoreOrder(s)
 }
@@ -920,6 +1073,124 @@ func NewOrderRepository(db *sql.DB) *repository.Repository[*Order] {
 
 ---
 
+## Чтение timestamps из БД (Read Model)
+
+Если вашему API нужно возвращать `created_at` / `updated_at`, используйте **отдельную Read Model** — это типичное разделение Write Model и Read Model:
+
+### Write Model (доменный агрегат)
+
+```go
+// Домен — без timestamps
+type Project struct {
+    id, name string
+    version  int
+}
+
+// Write Repository — timestamps управляются SQL
+var projectTable = repository.Table{
+    Name:       "projects",
+    PrimaryKey: []string{"id"},
+    Columns:    []string{"id", "name", "version"},
+    VersionColumn: "version",
+    CreatedAt:     "created_at",
+    UpdatedAt:     "updated_at",
+}
+```
+
+### Read Model (DTO для API)
+
+```go
+// application/query/project_view.go
+type ProjectView struct {
+    ID        string    `json:"id"`
+    Name      string    `json:"name"`
+    Version   int       `json:"version"`
+    CreatedAt time.Time `json:"created_at"`
+    UpdatedAt time.Time `json:"updated_at"`
+}
+
+// Read Repository — читает ВСЕ колонки включая timestamps
+var projectViewTable = repository.Table{
+    Name:       "projects",
+    PrimaryKey: []string{"id"},
+    Columns:    []string{"id", "name", "version", "created_at", "updated_at"},
+    // НЕ указываем CreatedAt/UpdatedAt — это Read-Only модель, Save не вызывается
+}
+
+func NewProjectViewRepository(db *sql.DB) *repository.Repository[*ProjectView] {
+    return repository.New(db, repository.Postgres(), repository.Simple(
+        repository.SimpleConfig[*ProjectView]{
+            Table: projectViewTable,
+            Scan: func(sc repository.Scanner) (*ProjectView, error) {
+                var v ProjectView
+                err := sc.Scan(&v.ID, &v.Name, &v.Version, &v.CreatedAt, &v.UpdatedAt)
+                return &v, err
+            },
+            Values: func(v *ProjectView) []any {
+                // Read-only — не используется, но нужен для интерфейса
+                return []any{v.ID, v.Name, v.Version, v.CreatedAt, v.UpdatedAt}
+            },
+        },
+    ))
+}
+```
+
+### Использование в обработчиках
+
+```go
+func GetProjectHandler(
+    writeRepo *repository.Repository[*Project],      // для Save/Delete
+    readRepo  *repository.Repository[*ProjectView],   // для чтения с датами
+) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        id := r.PathValue("id")
+
+        // Читаем через Read Model — с timestamps
+        view, err := readRepo.Find(r.Context(), id)
+        if err != nil {
+            // ...
+        }
+
+        json.NewEncoder(w).Encode(view)
+    }
+}
+```
+
+### Когда Read Model не нужна
+
+Если timestamps не нужны в ответе API — используйте только Write Model. Это проще и достаточно для многих случаев:
+
+```go
+// API-ответ формируется из доменной модели
+type ProjectResponse struct {
+    ID      string `json:"id"`
+    Name    string `json:"name"`
+    Version int    `json:"version"`
+    // Нет timestamps — и это нормально
+}
+```
+
+### Схема
+
+```
+┌────────────────────────────┐    ┌────────────────────────────┐
+│       Write Model          │    │        Read Model           │
+│                            │    │                            │
+│  Columns: [id, name, ver]  │    │  Columns: [id, name, ver,  │
+│  CreatedAt: "created_at"   │    │           created_at,       │
+│  UpdatedAt: "updated_at"   │    │           updated_at]       │
+│                            │    │  CreatedAt: ""  (не указан) │
+│  Save() ✓  Delete() ✓     │    │  UpdatedAt: ""  (не указан) │
+│  Find() — без дат          │    │                            │
+│                            │    │  Find() ✓ — с датами       │
+│                            │    │  Save() — не вызывается    │
+└────────────────────────────┘    └────────────────────────────┘
+         │                                    │
+         └──────── одна и та же таблица ──────┘
+```
+
+---
+
 ## Ошибки
 
 Пакет определяет три sentinel-ошибки:
@@ -955,7 +1226,7 @@ if errors.Is(err, repository.ErrInvalidCursor) {
 
 ## Полный пример
 
-Полноценный пример с PostgreSQL, Soft Delete, версионированием и пагинацией:
+Полноценный пример с PostgreSQL, Soft Delete, версионированием, автоматическими timestamps и пагинацией:
 
 ```go
 package main
@@ -981,6 +1252,7 @@ type Article struct {
     title   string
     status  string
     version int
+    // НЕТ createdAt / updatedAt — управляются SQL
 }
 
 func NewArticle(id, title string) *Article {
@@ -991,18 +1263,15 @@ func (a *Article) ID() string      { return a.id }
 func (a *Article) Title() string   { return a.title }
 func (a *Article) Publish()        { a.status = "published" }
 
-// ArticleSnapshot — плоское представление для персистентности
 type ArticleSnapshot struct {
     ID, Title, Status string
     Version           int
 }
 
-// Snapshot возвращает плоский снимок агрегата
 func (a *Article) Snapshot() ArticleSnapshot {
     return ArticleSnapshot{a.id, a.title, a.status, a.version}
 }
 
-// Restore восстанавливает агрегат из снимка
 func (s ArticleSnapshot) Restore() *Article {
     return &Article{id: s.ID, title: s.Title, status: s.Status, version: s.Version}
 }
@@ -1015,8 +1284,8 @@ var articleTable = repo.Table{
     Columns:       []string{"id", "title", "status", "version"},
     VersionColumn: "version",
     SoftDelete:    "deleted_at",
-    CreatedAt:     "created_at",
-    UpdatedAt:     "updated_at",
+    CreatedAt:     "created_at",   // NOW() при INSERT
+    UpdatedAt:     "updated_at",   // NOW() при INSERT и UPDATE
 }
 
 func NewArticleRepo(db *sql.DB) *repo.Repository[*Article] {
@@ -1024,6 +1293,7 @@ func NewArticleRepo(db *sql.DB) *repo.Repository[*Article] {
         Table: articleTable,
         Scan: func(sc repo.Scanner) (*Article, error) {
             var s ArticleSnapshot
+            // 4 колонки = 4 значения в Scan
             if err := sc.Scan(&s.ID, &s.Title, &s.Status, &s.Version); err != nil {
                 return nil, err
             }
@@ -1031,6 +1301,7 @@ func NewArticleRepo(db *sql.DB) *repo.Repository[*Article] {
         },
         Values: func(a *Article) []any {
             s := a.Snapshot()
+            // 4 значения = 4 плейсхолдера. created_at/updated_at добавляются как NOW()
             return []any{s.ID, s.Title, s.Status, s.Version}
         },
     }))
@@ -1045,10 +1316,18 @@ func main() {
     articles := NewArticleRepo(db)
     ctx := context.Background()
 
-    // Создаём статью
+    // Создаём статью — created_at и updated_at заполнятся автоматически
     a := NewArticle("a-1", "Hello World")
     a.Publish()
     if err := articles.Save(ctx, a); err != nil {
+        log.Fatal(err)
+    }
+
+    // При повторном Save — updated_at обновится автоматически,
+    // created_at останется прежним
+    a2, _ := articles.Find(ctx, "a-1")
+    // ... изменяем a2 ...
+    if err := articles.Save(ctx, a2); err != nil {
         log.Fatal(err)
     }
 
@@ -1065,7 +1344,7 @@ func main() {
     }
     page, err := articles.Query(ctx).
         Where(repo.Eq("status", "published")).
-        OrderBy("created_at", repo.Desc).
+        OrderBy("id", repo.Desc).
         PageSize(10).
         Page(extractor)
     if err != nil {
@@ -1129,11 +1408,19 @@ func main() {
 |------|-----|----------|
 | `Name` | `string` | Имя таблицы |
 | `PrimaryKey` | `[]string` | Колонки первичного ключа |
-| `Columns` | `[]string` | Все колонки |
-| `VersionColumn` | `string` | Колонка версии (Optimistic Locking) |
-| `SoftDelete` | `string` | Колонка мягкого удаления |
-| `CreatedAt` | `string` | Колонка времени создания |
-| `UpdatedAt` | `string` | Колонка времени обновления |
+| `Columns` | `[]string` | Колонки для SELECT и плейсхолдеров INSERT. **Не включать** `CreatedAt`/`UpdatedAt` |
+| `VersionColumn` | `string` | Колонка версии (Optimistic Locking). **Включается** в `Columns` |
+| `SoftDelete` | `string` | Колонка мягкого удаления. **Не включается** в `Columns` |
+| `CreatedAt` | `string` | Колонка времени создания. Заполняется `NOW()` при INSERT. **Не включается** в `Columns` |
+| `UpdatedAt` | `string` | Колонка времени обновления. Заполняется `NOW()` при INSERT и UPDATE. **Не включается** в `Columns` |
+
+### Соотношение Columns, Scan и Values
+
+```
+len(Columns) = количество аргументов в Scan = количество элементов в Values
+```
+
+`CreatedAt`, `UpdatedAt`, `SoftDelete` — автоматические колонки, не входят в `Columns`.
 
 ### Спецификации
 
@@ -1211,3 +1498,4 @@ open coverage.html
 - [Keyset Pagination](https://use-the-index-luke.com/no-offset) — Markus Winand
 - [Optimistic Offline Lock](https://martinfowler.com/eaaCatalog/optimisticOfflineLock.html)
 - [Go Generics](https://go.dev/doc/tutorial/generics)
+- [CQRS](https://martinfowler.com/bliki/CQRS.html) — разделение Write и Read моделей
