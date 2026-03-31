@@ -12,6 +12,7 @@ type Repository[T any] struct {
 	table   Table
 	dialect Dialect
 	driver  driver[T]
+	logger  Logger
 }
 
 func New[T any](db *sql.DB, dialect Dialect, mapping Mapping[T]) *Repository[T] {
@@ -22,6 +23,26 @@ func New[T any](db *sql.DB, dialect Dialect, mapping Mapping[T]) *Repository[T] 
 		dialect: dialect,
 		driver:  m.driver,
 	}
+}
+
+func (r *Repository[T]) WithLogger(l Logger) *Repository[T] {
+	copy := *r
+	copy.logger = l
+	return &copy
+}
+
+func (r *Repository[T]) exec() Executor {
+	if r.logger != nil {
+		return &loggingExecutor{inner: r.db, logger: r.logger}
+	}
+	return r.db
+}
+
+func (r *Repository[T]) txBeginner() TxBeginner {
+	if r.logger != nil {
+		return &loggingTxBeginner{inner: r.db, logger: r.logger}
+	}
+	return r.db
 }
 
 func (r *Repository[T]) Find(ctx context.Context, ids ...any) (T, error) {
@@ -36,7 +57,7 @@ func (r *Repository[T]) Find(ctx context.Context, ids ...any) (T, error) {
 	condition, args, _ := spec.ToSQL(r.dialect, 1)
 	query := r.table.selectWhere(condition)
 
-	agg, err := r.driver.findOne(ctx, r.db, query, args)
+	agg, err := r.driver.findOne(ctx, r.exec(), query, args)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return agg, fmt.Errorf("%w: %v", ErrNotFound, err)
@@ -60,7 +81,7 @@ func (r *Repository[T]) FindBy(ctx context.Context, s Spec) ([]T, error) {
 		query = r.table.selectFrom()
 	}
 
-	return r.driver.findMany(ctx, r.db, query, args)
+	return r.driver.findMany(ctx, r.exec(), query, args)
 }
 
 func (r *Repository[T]) ExistsBy(ctx context.Context, s Spec) (bool, error) {
@@ -77,8 +98,9 @@ func (r *Repository[T]) ExistsBy(ctx context.Context, s Spec) (bool, error) {
 		query = fmt.Sprintf("SELECT EXISTS(SELECT 1 FROM %s)", r.table.Name)
 	}
 
+	exec := r.exec()
 	var exists bool
-	err := r.db.QueryRowContext(ctx, query, args...).Scan(&exists)
+	err := exec.QueryRowContext(ctx, query, args...).Scan(&exists)
 	return exists, err
 }
 
@@ -96,17 +118,22 @@ func (r *Repository[T]) CountBy(ctx context.Context, s Spec) (int64, error) {
 		query = fmt.Sprintf("SELECT COUNT(*) FROM %s", r.table.Name)
 	}
 
+	exec := r.exec()
 	var count int64
-	err := r.db.QueryRowContext(ctx, query, args...).Scan(&count)
+	err := exec.QueryRowContext(ctx, query, args...).Scan(&count)
 	return count, err
 }
 
 func (r *Repository[T]) Save(ctx context.Context, aggregate T) error {
-	return r.driver.save(ctx, r.db, r.db, aggregate)
+	return r.driver.save(ctx, r.txBeginner(), r.exec(), aggregate)
 }
 
 func (r *Repository[T]) SaveTx(ctx context.Context, tx *sql.Tx, aggregate T) error {
-	return r.driver.save(ctx, nil, tx, aggregate)
+	var exec Executor = tx
+	if r.logger != nil {
+		exec = &loggingExecutor{inner: tx, logger: r.logger}
+	}
+	return r.driver.save(ctx, nil, exec, aggregate)
 }
 
 func (r *Repository[T]) Delete(ctx context.Context, ids ...any) error {
@@ -114,7 +141,7 @@ func (r *Repository[T]) Delete(ctx context.Context, ids ...any) error {
 		return fmt.Errorf("expected %d primary key value(s), got %d",
 			len(r.table.PrimaryKey), len(ids))
 	}
-	return r.driver.delete(ctx, r.db, r.db, ids)
+	return r.driver.delete(ctx, r.txBeginner(), r.exec(), ids)
 }
 
 func (r *Repository[T]) DeleteTx(ctx context.Context, tx *sql.Tx, ids ...any) error {
@@ -122,7 +149,11 @@ func (r *Repository[T]) DeleteTx(ctx context.Context, tx *sql.Tx, ids ...any) er
 		return fmt.Errorf("expected %d primary key value(s), got %d",
 			len(r.table.PrimaryKey), len(ids))
 	}
-	return r.driver.delete(ctx, nil, tx, ids)
+	var exec Executor = tx
+	if r.logger != nil {
+		exec = &loggingExecutor{inner: tx, logger: r.logger}
+	}
+	return r.driver.delete(ctx, nil, exec, ids)
 }
 
 func (r *Repository[T]) Query(ctx context.Context) *Query[T] {

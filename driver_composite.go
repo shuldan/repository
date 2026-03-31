@@ -292,7 +292,13 @@ func (d *compositeDriver[T, S]) batchLoadChildren(
 			return err
 		}
 
-		parentID := fmt.Sprint(rawValues[fkIdx])
+		var parentID string
+		switch v := rawValues[fkIdx].(type) {
+		case []byte:
+			parentID = string(v)
+		default:
+			parentID = fmt.Sprint(v)
+		}
 		snap, ok := snapByID[parentID]
 		if !ok {
 			continue

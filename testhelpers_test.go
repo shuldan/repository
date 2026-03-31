@@ -236,3 +236,85 @@ func newCompositeDriver(
 		extractPK: compositeExtractPK,
 	}
 }
+
+type mockLogger struct {
+	mu     sync.Mutex
+	infos  []logEntry
+	warns  []logEntry
+	errors []logEntry
+	debugs []logEntry
+}
+
+type logEntry struct {
+	msg  string
+	args []any
+}
+
+func (l *mockLogger) Info(msg string, args ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.infos = append(l.infos, logEntry{msg, args})
+}
+
+func (l *mockLogger) Warn(msg string, args ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.warns = append(l.warns, logEntry{msg, args})
+}
+
+func (l *mockLogger) Error(msg string, args ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.errors = append(l.errors, logEntry{msg, args})
+}
+
+func (l *mockLogger) Debug(msg string, args ...any) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.debugs = append(l.debugs, logEntry{msg, args})
+}
+
+func (l *mockLogger) debugCount() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.debugs)
+}
+
+func (l *mockLogger) errorCount() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return len(l.errors)
+}
+
+func (l *mockLogger) reset() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.infos = nil
+	l.warns = nil
+	l.errors = nil
+	l.debugs = nil
+}
+
+func newSimpleTestRepoWithLogger(t *testing.T, conn *testConn, tbl Table, lg Logger) *Repository[string] {
+	t.Helper()
+	db := newTestDB(t, conn)
+	cfg := SimpleConfig[string]{Table: tbl, Scan: simpleScan, Values: simpleValues}
+	return New(db, Postgres(), Simple(cfg)).WithLogger(lg)
+}
+
+type failingExecutor struct {
+	err error
+}
+
+func (e *failingExecutor) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return nil, e.err
+}
+
+func (e *failingExecutor) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	db, _ := sql.Open("sqlite3", ":memory:")
+	return db.QueryRowContext(ctx, "SELECT 1 WHERE 1=0")
+}
+
+func (e *failingExecutor) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	return nil, e.err
+}

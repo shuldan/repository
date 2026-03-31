@@ -58,7 +58,7 @@ func (q *Query[T]) Before(cursor string) *Query[T] {
 
 func (q *Query[T]) All() ([]T, error) {
 	query, args := q.buildSQL()
-	return q.repo.driver.findMany(q.ctx, q.repo.db, query, args)
+	return q.repo.driver.findMany(q.ctx, q.repo.exec(), query, args)
 }
 
 func (q *Query[T]) First() (T, error) {
@@ -66,7 +66,7 @@ func (q *Query[T]) First() (T, error) {
 	q.limit = &one
 	query, args := q.buildSQL()
 
-	items, err := q.repo.driver.findMany(q.ctx, q.repo.db, query, args)
+	items, err := q.repo.driver.findMany(q.ctx, q.repo.exec(), query, args)
 	if err != nil {
 		var zero T
 		return zero, err
@@ -94,8 +94,9 @@ func (q *Query[T]) Count() (int64, error) {
 		query = fmt.Sprintf("SELECT COUNT(*) FROM %s", q.repo.table.Name)
 	}
 
+	exec := q.repo.exec()
 	var count int64
-	err := q.repo.db.QueryRowContext(q.ctx, query, args...).Scan(&count)
+	err := exec.QueryRowContext(q.ctx, query, args...).Scan(&count)
 	return count, err
 }
 
@@ -115,8 +116,9 @@ func (q *Query[T]) Exists() (bool, error) {
 		query = fmt.Sprintf("SELECT EXISTS(SELECT 1 FROM %s)", q.repo.table.Name)
 	}
 
+	exec := q.repo.exec()
 	var exists bool
-	err := q.repo.db.QueryRowContext(q.ctx, query, args...).Scan(&exists)
+	err := exec.QueryRowContext(q.ctx, query, args...).Scan(&exists)
 	return exists, err
 }
 
@@ -164,7 +166,7 @@ func (q *Query[T]) Page(extract CursorExtractor[T]) (*Page[T], error) {
 	query += fmt.Sprintf(" LIMIT %s", d.Placeholder(nextParam))
 	args = append(args, fetchSize)
 
-	items, err := q.repo.driver.findMany(q.ctx, q.repo.db, query, args)
+	items, err := q.repo.driver.findMany(q.ctx, q.repo.exec(), query, args)
 	if err != nil {
 		return nil, err
 	}
